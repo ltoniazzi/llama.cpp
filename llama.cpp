@@ -2296,6 +2296,8 @@ struct llama_context {
 
     llama_cparams cparams;
 
+    bool lora_loaded = false;
+
     std::vector<ggml_backend_t> backends;
 #ifdef GGML_USE_METAL
     ggml_backend_t backend_metal = nullptr;
@@ -9470,6 +9472,17 @@ struct llm_build_context {
         return gf;
     }
 
+    static ggml_tensor * lora_mul_mat(llama_context & lctx, ggml_context * ctx0, ggml_tensor * weight, ggml_tensor * cur) {
+    ggml_tensor * mm = ggml_mul_mat(ctx0, weight, cur);
+
+    if (!lctx.lora_loaded) {
+        return mm;
+    }
+
+    
+    return cur;
+}
+
     struct ggml_cgraph * build_phi3() {
         struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, LLAMA_MAX_NODES, false);
 
@@ -9507,7 +9520,7 @@ struct llm_build_context {
                 struct ggml_tensor * Vcur = nullptr;
 
                 if (model.layers[il].wqkv) {
-                    cur = ggml_mul_mat(ctx0, model.layers[il].wqkv, attn_norm_output);
+                    cur = lora_mul_mat(lctx, ctx0, model.layers[il].wqkv, attn_norm_output);
                     cb(cur, "wqkv", il);
 
                     Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd,     n_tokens, cur->nb[1], 0 * sizeof(float) * (n_embd)));
@@ -9515,9 +9528,9 @@ struct llm_build_context {
                     Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd_gqa, n_tokens, cur->nb[1], 1 * sizeof(float) * (n_embd + n_embd_gqa)));
                 }
                 else {
-                    Qcur = ggml_add(ctx0, ggml_mul_mat(ctx0, model.layers[il].wq, attn_norm_output), model.layers[il].bq);
-                    Kcur = ggml_add(ctx0, ggml_mul_mat(ctx0, model.layers[il].wk, attn_norm_output), model.layers[il].bk);
-                    Vcur = ggml_add(ctx0, ggml_mul_mat(ctx0, model.layers[il].wv, attn_norm_output), model.layers[il].bv);
+                    Qcur = ggml_add(ctx0, lora_mul_mat(lctx, ctx0, model.layers[il].wq, attn_norm_output), model.layers[il].bq);
+                    Kcur = ggml_add(ctx0, lora_mul_mat(lctx, ctx0, model.layers[il].wk, attn_norm_output), model.layers[il].bk);
+                    Vcur = ggml_add(ctx0, lora_mul_mat(lctx, ctx0, model.layers[il].wv, attn_norm_output), model.layers[il].bv);
                 }
 
                 cb(Qcur, "Qcur", il);
@@ -9566,7 +9579,7 @@ struct llm_build_context {
             // special-case: the up and gate tensors are merged into a single tensor
             // TOOD: support into llm_build_ffn
             {
-                struct ggml_tensor* up = ggml_mul_mat(ctx0, model.layers[il].ffn_up, cur);
+                struct ggml_tensor* up = lora_mul_mat(lctx, ctx0, model.layers[il].ffn_up, cur);
                 cb(up, "ffn_up", il);
 
                 auto g = ggml_cont(ctx0, ggml_view_2d(ctx0, up, up->ne[0] / 2, up->ne[1], ggml_row_size(up->type, up->ne[0]), 0));
@@ -9575,7 +9588,7 @@ struct llm_build_context {
                 y = ggml_mul(ctx0, y, ggml_silu(ctx0, g));
                 cb(y, "ffn_gate", il);
 
-                auto down = ggml_mul_mat(ctx0, model.layers[il].ffn_down, y);
+                auto down = lora_mul_mat(lctx, ctx0, model.layers[il].ffn_down, y);
                 cb(down, "ffn_down", il);
 
                 cur = down;
@@ -9594,7 +9607,7 @@ struct llm_build_context {
             LLM_NORM_RMS, cb, -1);
         cb(cur, "result_norm", -1);
 
-        cur = ggml_mul_mat(ctx0, model.output, cur);
+        cur = lora_mul_mat(lctx, ctx0, model.output, cur);
         cb(cur, "result_output", -1);
 
         ggml_build_forward_expand(gf, cur);

@@ -5,3 +5,9 @@
 3. check the PR "It was removed in [#7204](https://github.com/ggerganov/llama.cpp/pull/7204). `convert-lora-to-ggml.py` seems to write  loras to gguf witouth the model? Should check the train script and see how they match lora with base layers
 4. https://github.com/ggerganov/llama.cpp/discussions/3489
 5. check lora example in examples `examples/export-lora/export-lora.cpp`, ask gpt if can be used to extend applying multiple Loras, then ask back to lauren
+6. try debug cpp at runtime to understand the context variable and where the adapter lives there
+
+Compile with (check faster compilation tips)
+```
+make LLAMA_DEBUG=1
+```
