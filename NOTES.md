@@ -9,5 +9,5 @@
 
 Compile with (check faster compilation tips)
 ```
-make LLAMA_DEBUG=1
+make -j 8 LLAMA_DEBUG=1
 ```
