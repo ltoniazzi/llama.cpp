@@ -2282,6 +2282,10 @@ struct llama_model {
     }
 };
 
+struct lora_weights {
+    ggml_tensor* loraA;
+    ggml_tensor* loraB;
+};
 struct llama_context {
     llama_context(const llama_model & model) : model(model), t_start_us(model.t_start_us), t_load_us(model.t_load_us) {}
     ~llama_context() {
@@ -2297,6 +2301,9 @@ struct llama_context {
     llama_cparams cparams;
 
     bool lora_loaded = false;
+    std::map<std::string, lora_weights> lora_weights_map;
+    ggml_tensor* lora_scale = nullptr;
+    
 
     std::vector<ggml_backend_t> backends;
 #ifdef GGML_USE_METAL
@@ -9472,15 +9479,38 @@ struct llm_build_context {
         return gf;
     }
 
-    static ggml_tensor * lora_mul_mat(llama_context & lctx, ggml_context * ctx0, ggml_tensor * weight, ggml_tensor * cur) {
+    static ggml_tensor * lora_mul_mat(
+        llama_context & lctx, 
+        ggml_context * ctx0, 
+        ggml_tensor * weight, 
+        ggml_tensor * cur) {
     ggml_tensor * mm = ggml_mul_mat(ctx0, weight, cur);
 
-    if (!lctx.lora_loaded) {
+    auto it = lctx.lora_weights_map.find(weight->name);
+    if (it == lctx.lora_weights_map.end()) {
         return mm;
     }
 
-    
-    return cur;
+    ggml_tensor * loraA = it->second.loraA;
+    ggml_tensor * loraB = it->second.loraB;
+
+    ggml_tensor * t_lora =
+        ggml_mul_mat(ctx0,
+            loraB,
+            ggml_mul_mat(ctx0,
+                loraA,
+                cur
+            )
+        );
+
+    if (*(float*)lctx.lora_scale->data != 1.0f) {
+        float scale = *(float*)lctx.lora_scale->data;
+        t_lora = ggml_scale(ctx0, t_lora, scale);
+    }
+
+    ggml_tensor * t_patch = ggml_add(ctx0, mm, t_lora);
+    return t_patch;
+
 }
 
     struct ggml_cgraph * build_phi3() {

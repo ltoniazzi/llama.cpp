@@ -1,7 +1,11 @@
 # Main plan
 
-1. Design inference pattern to pick up LoRA adapters for matmul (factor  it for phi3 only)
+1. Design inference pattern to pick up LoRA adapters for matmul (factor it for phi3 only). 
+    - How to check performance in these cases?
 2. Ask advice on compilation of adapters in the model, basically where to gguf write them, and should it be done with the base model from the safetensors format or should we do it from two compiled versions, should ask somebody about this design.
+
+
+
 
 ## TODOs
 
@@ -33,3 +37,9 @@
     ```bash
     ./main -m ./models/phi-3-mini/ggml-model-Q4_K_M.gguf -n 128
     ```
+
+
+On the compilation side of this probelm:
+1. Should I write the adapter weights in the same gguf file with the base weight? 
+2. If yes to (1), are there other scripts in the repo to get inspiration from for how to compile base weights along with lora weights in the same gguf file?
+3. If no to (1), what is a good strategy to compile the lora weights?
