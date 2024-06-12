@@ -43,3 +43,41 @@ On the compilation side of this probelm:
 1. Should I write the adapter weights in the same gguf file with the base weight? 
 2. If yes to (1), are there other scripts in the repo to get inspiration from for how to compile base weights along with lora weights in the same gguf file?
 3. If no to (1), what is a good strategy to compile the lora weights?
+
+
+## Debug
+
+```json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "(gdb) Launch",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/main",
+            "args": ["-m", "./models/phi-3-mini/ggml-model-Q4_K_M.gguf", "-n", "128"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        }
+    ]
+}
+```
