@@ -31,6 +31,8 @@
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
 
+
+
 static llama_context           ** g_ctx;
 static llama_model             ** g_model;
 static gpt_params               * g_params;
@@ -197,8 +199,8 @@ int main(int argc, char ** argv) {
 
     // load the model and apply lora adapter, if any
     LOG("%s: load the model and apply lora adapter, if any\n", __func__);
+
     std::tie(model, ctx) = llama_init_from_gpt_params(params);
-    // std::tie(model_lora, ctx_lora) = llama_init_from_gpt_params(params);
     if (sparams.cfg_scale > 1.f) {
         struct llama_context_params lparams = llama_context_params_from_gpt_params(params);
         ctx_guidance = llama_new_context_with_model(model, lparams);
@@ -314,7 +316,7 @@ int main(int argc, char ** argv) {
                 __func__, n_matching_session_tokens, embd_inp.size());
         }
 
-        // remove any "future" tokens that we might have inherited from the previous session
+        // remove any "future" tokens that we might have inherited from the previous session TODO check how this plays with lora when swapping
         llama_kv_cache_seq_rm(ctx, -1, n_matching_session_tokens, -1);
     }
 

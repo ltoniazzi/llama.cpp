@@ -17,6 +17,11 @@
 6. try debug cpp at runtime to understand the context variable and where the adapter lives there
 
 
+1. Add lora to context and then to mat_mul for ollama
+2. Add anothe lora and swap
+3. Understand runtime swapping logic (like the server is up, run the init only when passing different lora param)
+4. If design from finetuning no need to design from peft.
+
 
 ## Comments/Tips
 
@@ -81,3 +86,28 @@ On the compilation side of this probelm:
     ]
 }
 ```
+
+
+download ollama
+quantize
+finetune llora
+
+## Open-LLama
+
+load loading model? check export lora
+
+1. [Open-llama download safe tensors](https://huggingface.co/openlm-research/open_llama_3b_v2/tree/main)
+
+2. Data `data/shakespeare_short.txt` is just two words.
+
+3. Run:
+    ```bash
+    python3 convert-hf-to-gguf.py --model models/open-llama/
+
+    ./quantize ./models/open-llama/ggml-model-f16.gguf ./models/open-llama/ggml-model-q8_0.gguf Q8_0
+    
+    ./finetune         --model-base models/open-llama/open-llama-3b-v2-q8_0.gguf         --checkpoint-in  models/open-llama/chk-lora-open-llama-3b-v2-q8_0-shakespeare-LATEST.gguf         --checkpoint-out models/open-llama/chk-lora-open-llama-3b-v2-q8_0-shakespeare-ITERATION.gguf         --lora-out models/open-llama/lora-open-llama-3b-v2-q8_0-shakespeare-ITERATION.bin         --train-data "data/shakespeare_short.txt"         --save-every 1         --threads 1 --adam-iter 1 --batch 1 --ctx 16         --use-checkpointing
+    
+    ./export-lora     -m models/open-llama/open-llama-3b-v2-q8_0.gguf     -o models/open-llama/open-llama-3b-v2-q8_0-english2tokipona-chat.gguf     -l models/open-llama/lora-open-llama-3b-v2-q8_0-shakespeare-LATEST.bin
+
+    ```

@@ -7,14 +7,14 @@ Basic usage instructions:
 wget https://raw.githubusercontent.com/brunoklein99/deep-learning-notes/master/shakespeare.txt
 
 # finetune LORA adapter
-./bin/finetune \
-        --model-base open-llama-3b-v2-q8_0.gguf \
-        --checkpoint-in  chk-lora-open-llama-3b-v2-q8_0-shakespeare-LATEST.gguf \
-        --checkpoint-out chk-lora-open-llama-3b-v2-q8_0-shakespeare-ITERATION.gguf \
-        --lora-out lora-open-llama-3b-v2-q8_0-shakespeare-ITERATION.bin \
-        --train-data "shakespeare.txt" \
-        --save-every 10 \
-        --threads 6 --adam-iter 30 --batch 4 --ctx 64 \
+./finetune \
+        --model-base models/open-llama/open-llama-3b-v2-q8_0.gguf \
+        --checkpoint-in  models/open-llama/chk-lora-open-llama-3b-v2-q8_0-shakespeare-LATEST.gguf \
+        --checkpoint-out models/open-llama/chk-lora-open-llama-3b-v2-q8_0-shakespeare-ITERATION.gguf \
+        --lora-out models/open-llama/lora-open-llama-3b-v2-q8_0-shakespeare-ITERATION.bin \
+        --train-data "data/shakespeare_short.txt" \
+        --save-every 1 \
+        --threads 1 --adam-iter 1 --batch 1 --ctx 16 \
         --use-checkpointing
 
 # predict
