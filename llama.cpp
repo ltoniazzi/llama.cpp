@@ -16327,20 +16327,13 @@ struct llama_context * llama_new_context_with_model(
     if (loras.size() == 0) {
         fprintf(stderr, "warning: no lora adapters will be applied.\n");
     }
-
+    // Assign data 
     ctx->llora_data = *loras[0];
-
-
-    // TODO do this later on in mat_ul so that you have the ggml_context with ctx0
-    // for (size_t k = 0; k < loras.size(); ++k) {
-    //     struct ggml_tensor * tensor = ggml_get_tensor(ctx, "0");
-    //         std::string name = ggml_get_name(tensor);
-    //     std::string name_a = name + std::string(".loraA");
-    //     std::string name_b = name + std::string(".loraB");
-    //     struct ggml_tensor * lora_a = ggml_get_tensor(loras[k]->ctx, name_a.c_str());
-    //     struct ggml_tensor * lora_b = ggml_get_tensor(loras[k]->ctx, name_b.c_str());
-    //         // apply_lora(tensor, loras[k], params->n_threads);
-    //     }
+    // extract lora ggml_tensor example. Maybe use it to build the map?
+    std::string name_a = std::string("output_norm.weight.loraA");
+    std::string name_b = std::string("output_norm.weight.loraB");
+    struct ggml_tensor * lora_a = ggml_get_tensor((ctx->llora_data).ctx, name_a.c_str());
+    delete lora_a;
     
     /// END LORA
 
