@@ -4,7 +4,19 @@
     - How to check performance in these cases?
 2. Ask advice on compilation of adapters in the model, basically where to gguf write them, and should it be done with the base model from the safetensors format or should we do it from two compiled versions, should ask somebody about this design.
 
-
+3. looks like the functionality already exists here no? what is the difference from building the graph, are the weights merged or something? Try load it. See in `llama.cpp`:
+    ```cpp
+    for (unsigned int i = 0; i < params.lora_adapter.size(); ++i) {
+        const std::string & lora_adapter = std::get<0>(params.lora_adapter[i]);
+        float lora_scale = std::get<1>(params.lora_adapter[i]);
+        int err = llama_model_apply_lora_from_file(model,
+                                             lora_adapter.c_str(),
+                                             lora_scale,
+                                             ((i > 0) || params.lora_base.empty())
+                                                ? NULL
+                                                : params.lora_base.c_str(),
+                                             params.n_threads);
+    ```
 
 
 ## TODOs
