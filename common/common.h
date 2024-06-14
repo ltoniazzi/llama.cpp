@@ -98,6 +98,7 @@ struct gpt_params {
     // // sampling parameters
     struct llama_sampling_params sparams;
 
+    std::string hot_lora             = ""; // lora model path for hot swapping
     std::string model                = ""; // model path
     std::string model_draft          = ""; // draft model for speculative decoding
     std::string model_alias          = "unknown"; // model alias

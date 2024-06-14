@@ -100,7 +100,7 @@ struct lora_info {
     std::string filename;
     float scale;
 };
-
+// TODO lora_data should maybe sub lora_weights in llama.cpp
 struct lora_data {
     struct lora_info     info;
     std::vector<uint8_t> data;
@@ -996,6 +996,14 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             return true;
         }
         params.model = argv[i];
+        return true;
+    }
+    if (arg == "-hl" || arg == "--hot-lora") {
+        if (++i >= argc) {
+            invalid_param = true;
+            return true;
+        }
+        params.hot_lora = argv[i];
         return true;
     }
     if (arg == "-md" || arg == "--model-draft") {
@@ -2502,7 +2510,7 @@ std::tuple<struct llama_model *, struct llama_context *> llama_init_from_gpt_par
     /// LORA
     struct export_lora_params * lora_params = new struct export_lora_params;
     struct lora_info lora;
-    lora.filename = "./models/open-llama/lora-open-llama-3b-v2-q8_0-shakespeare-LATEST.bin";
+    lora.filename = params.hot_lora;
     lora.scale = 1.0f;
     lora_params->lora.push_back(lora);
     // load all loras
@@ -2517,7 +2525,7 @@ std::tuple<struct llama_model *, struct llama_context *> llama_init_from_gpt_par
         fprintf(stderr, "warning: no lora adapters will be applied.\n");
     }
     
-    /// LORA
+    /// END LORA
 
     auto mparams = llama_model_params_from_gpt_params(params);
 

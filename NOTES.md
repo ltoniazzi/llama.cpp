@@ -102,12 +102,13 @@ load loading model? check export lora
 
 3. Run:
     ```bash
+    # Convert base model
     python3 convert-hf-to-gguf.py --model models/open-llama/
 
     ./quantize ./models/open-llama/ggml-model-f16.gguf ./models/open-llama/ggml-model-q8_0.gguf Q8_0
     
-    ./finetune         --model-base models/open-llama/open-llama-3b-v2-q8_0.gguf         --checkpoint-in  models/open-llama/chk-lora-open-llama-3b-v2-q8_0-shakespeare-LATEST.gguf         --checkpoint-out models/open-llama/chk-lora-open-llama-3b-v2-q8_0-shakespeare-ITERATION.gguf         --lora-out models/open-llama/lora-open-llama-3b-v2-q8_0-shakespeare-ITERATION.bin         --train-data "data/shakespeare_short.txt"         --save-every 1         --threads 1 --adam-iter 1 --batch 1 --ctx 16         --use-checkpointing
+    ./finetune         --model-base models/open-llama/ggml-model-q8_0.gguf         --checkpoint-in  models/open-llama/chk-lora-ggml-model-q8_0-shakespeare-LATEST.gguf         --checkpoint-out models/open-llama/chk-lora-ggml-model-q8_0-shakespeare-ITERATION.gguf         --lora-out models/open-llama/lora-ggml-model-q8_0-shakespeare-ITERATION.bin         --train-data "data/shakespeare_short.txt"         --save-every 1         --threads 1 --adam-iter 1 --batch 1 --ctx 16         --use-checkpointing
     
-    ./export-lora     -m models/open-llama/open-llama-3b-v2-q8_0.gguf     -o models/open-llama/open-llama-3b-v2-q8_0-english2tokipona-chat.gguf     -l models/open-llama/lora-open-llama-3b-v2-q8_0-shakespeare-LATEST.bin
+    ./export-lora     -m models/open-llama/ggml-model-q8_0.gguf     -o models/open-llama/ggml-model-q8_0-english2tokipona-chat.gguf     -l models/open-llama/lora-ggml-model-q8_0-shakespeare-LATEST.bin
 
     ```
