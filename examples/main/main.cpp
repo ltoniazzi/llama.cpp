@@ -190,9 +190,7 @@ int main(int argc, char ** argv) {
     llama_numa_init(params.numa);
 
     llama_model * model;
-    // llama_model * model_lora;
     llama_context * ctx;
-    // llama_context * ctx_lora;
     llama_context * ctx_guidance = NULL;
     g_model = &model;
     g_ctx = &ctx;
