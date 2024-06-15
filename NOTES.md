@@ -17,7 +17,13 @@
                                                 : params.lora_base.c_str(),
                                              params.n_threads);
     ```
+    it's slow to load, I think it may be merging base with lora?
 
+
+## Current
+
+- Runs on cpu, should check the original version on main and compare (`make clean && make -j 8 LLAMA_NO_METAL=1`)
+- get error on metal (`make clean && make -j 8 `), to investigate/ask
 
 ## TODOs
 
@@ -33,6 +39,7 @@
 2. Add anothe lora and swap
 3. Understand runtime swapping logic (like the server is up, run the init only when passing different lora param)
 4. If design from finetuning no need to design from peft.
+5. check [gpt2 introduction PR](https://github.com/ggerganov/llama.cpp/commit/ea5497df5d138c83b2b0ca70aefdc4b1175c1001)
 
 
 ## Comments/Tips
