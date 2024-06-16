@@ -13,17 +13,91 @@
                                              lora_adapter.c_str(),
                                              lora_scale,
                                              ((i > 0) || params.lora_base.empty())
-                                                ? NULL
+               p                                 ? NULL
                                                 : params.lora_base.c_str(),
                                              params.n_threads);
     ```
     it's slow to load, I think it may be merging base with lora?
 
 
-## Current
+### Current
 
-- Runs on cpu, should check the original version on main and compare (`make clean && make -j 8 LLAMA_NO_METAL=1`)
-- get error on metal (`make clean && make -j 8 `), to investigate/ask
+- CPU: runs same performance as main (`make LLAMA_NO_METAL=1`)
+- M2: error (`make clean && make -j 8 `), to investigate/ask post error too, ask what is the issue with tensor format, or is it just finetune creating too many loras?
+
+Error: `ggml-metal.m`
+```cpp
+static id<MTLBuffer> ggml_metal_get_buffer(struct ggml_tensor * t, size_t * offs) {
+    //GGML_METAL_LOG_INFO("%s: data tensor '%16s', offs_data = %8ld, offs_eval = %8ld, offs_cach = %8ld\n", __func__, t->name, offs_data, offs_eval, offs_cach);
+
+    const int64_t tsize = ggml_nbytes(t);
+
+    ggml_backend_buffer_t buffer = t->view_src ? t->view_src->buffer : t->buffer;
+
+    struct ggml_backend_metal_buffer_context * buf_ctx = (struct ggml_backend_metal_buffer_context *) buffer->context;  // <- Error
+```
+With error in debug mode
+```bash
+Exception has occurred.
+EXC_BAD_ACCESS (code=1, address=0x50)
+```
+and output while running main
+```
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M2
+ggml_metal_init: picking default device: Apple M2
+ggml_metal_init: default.metallib not found, loading from source
+ggml_metal_init: GGML_METAL_PATH_RESOURCES = nil
+ggml_metal_init: loading '/Users/Lorenzo.Toniazzi/Workspace/forks/llama.cpp/ggml-metal.metal'
+ggml_metal_init: GPU name:   Apple M2
+ggml_metal_init: GPU family: MTLGPUFamilyApple8  (1008)
+ggml_metal_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_init: GPU family: MTLGPUFamilyMetal3  (5001)
+ggml_metal_init: simdgroup reduction support   = true
+ggml_metal_init: simdgroup matrix mul. support = true
+ggml_metal_init: hasUnifiedMemory              = true
+ggml_metal_init: recommendedMaxWorkingSetSize  = 11453.25 MB
+llama_kv_cache_init:      Metal KV buffer size =   650.00 MiB
+llama_new_context_with_model: KV self size  =  650.00 MiB, K (f16):  325.00 MiB, V (f16):  325.00 MiB
+llama_new_context_with_model:        CPU  output buffer size =     0.12 MiB
+ggml_gallocr_reserve_n: reallocating Metal buffer from size 0.00 MiB to 521.88 MiB
+ggml_gallocr_reserve_n: reallocating CPU buffer from size 0.00 MiB to 10.26 MiB
+llama_new_context_with_model:      Metal compute buffer size =   521.88 MiB
+llama_new_context_with_model:        CPU compute buffer size =    10.26 MiB
+llama_new_context_with_model: graph nodes  = 1075
+llama_new_context_with_model: graph splits = 2
+zsh: segmentation fault  ./main -m models/open-llama/ggml-model-q8_0.gguf -hl  -n 128
+```
+
+
+
+### LoRA layers in fintuning
+
+I found these layers being finetuned with LoRA on in `finetune.cpp`:
+Normalization Layers: `attn_norm`, `ffn_norm`, and `output_norm`
+Output Layers: `output.weight` 
+Embedding Layers: `token_embd.weight` 
+
+Are these layers you mentioned should not be finetuned?
+
+Is there an issue open for removing them? (I can take a look)
+
+
+
+
+### Answer
+
+I managed to apply the LoRA adapters to `Qcur`, `Kcur`, Vcur` by substituting in  `ggml_mul_mat` with `lora_mul_mat` (similar to your suggested one) inside `build_llama`. So other non-matrix multiplication layers are not applied to the graph. (They are only loaded in `llama_context`). Try not load them in map
+
+I found these layers being finetuned with LoRA on in `finetune.cpp`:
+Normalization Layers: `attn_norm`, `ffn_norm`, and `output_norm`
+Output Layers: `output.weight` 
+Embedding Layers: `token_embd.weight` 
+
+Are these layers you mentioned should not be finetuned?
+
+Is there an issue open for removing them? (I can take a look)
+
 
 ## TODOs
 

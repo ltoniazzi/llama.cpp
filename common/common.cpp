@@ -2297,7 +2297,7 @@ std::string fs_get_cache_file(const std::string & filename) {
 //
 
 std::tuple<struct llama_model *, struct llama_context *> llama_init_from_gpt_params(gpt_params & params) {
-    auto mparams = llama_model_params_from_gpt_params(params);
+     auto mparams = llama_model_params_from_gpt_params(params);
 
     llama_model * model = nullptr;
 

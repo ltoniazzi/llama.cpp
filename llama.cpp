@@ -7776,7 +7776,7 @@ struct llm_build_context {
         cb(cur, "result_norm", -1);
 
         // lm_head
-        cur = lora_mul_mat(lctx, ctx0, model.output, cur);
+        cur = ggml_mul_mat(ctx0, model.output, cur);
         cb(cur, "result_output", -1);
 
         ggml_build_forward_expand(gf, cur);
@@ -9702,7 +9702,7 @@ struct llm_build_context {
     ggml_tensor * mm = ggml_mul_mat(ctx0, weight, cur);
 
     auto it = lctx.lora_weights_map.find(weight->name);
-    if (it == lctx.lora_weights_map.end() || strcmp(weight->name, "output.weight") == 0) {
+    if (it == lctx.lora_weights_map.end()) {
         return mm;
     }
 
@@ -9710,7 +9710,7 @@ struct llm_build_context {
     ggml_tensor * loraB = it->second.loraB;
 
     ggml_tensor * t_lora = ggml_mul_mat(ctx0,
-                ggml_mul_mat(ctx0, loraB, loraA), 
+                ggml_mul_mat(ctx0, loraA, loraB), 
                 cur
             );
 
@@ -9760,7 +9760,7 @@ struct llm_build_context {
                 struct ggml_tensor * Vcur = nullptr;
 
                 if (model.layers[il].wqkv) {
-                    cur = lora_mul_mat(lctx, ctx0, model.layers[il].wqkv, attn_norm_output);
+                    cur = ggml_mul_mat(ctx0, model.layers[il].wqkv, attn_norm_output);
                     cb(cur, "wqkv", il);
 
                     Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd,     n_tokens, cur->nb[1], 0 * sizeof(float) * (n_embd)));
@@ -9768,9 +9768,9 @@ struct llm_build_context {
                     Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd_gqa, n_tokens, cur->nb[1], 1 * sizeof(float) * (n_embd + n_embd_gqa)));
                 }
                 else {
-                    Qcur = ggml_add(ctx0, lora_mul_mat(lctx, ctx0, model.layers[il].wq, attn_norm_output), model.layers[il].bq);
-                    Kcur = ggml_add(ctx0, lora_mul_mat(lctx, ctx0, model.layers[il].wk, attn_norm_output), model.layers[il].bk);
-                    Vcur = ggml_add(ctx0, lora_mul_mat(lctx, ctx0, model.layers[il].wv, attn_norm_output), model.layers[il].bv);
+                    Qcur = ggml_add(ctx0, ggml_mul_mat(ctx0, model.layers[il].wq, attn_norm_output), model.layers[il].bq);
+                    Kcur = ggml_add(ctx0, ggml_mul_mat(ctx0, model.layers[il].wk, attn_norm_output), model.layers[il].bk);
+                    Vcur = ggml_add(ctx0, ggml_mul_mat(ctx0, model.layers[il].wv, attn_norm_output), model.layers[il].bv);
                 }
 
                 cb(Qcur, "Qcur", il);
@@ -9819,7 +9819,7 @@ struct llm_build_context {
             // special-case: the up and gate tensors are merged into a single tensor
             // TOOD: support into llm_build_ffn
             {
-                struct ggml_tensor* up = lora_mul_mat(lctx, ctx0, model.layers[il].ffn_up, cur);
+                struct ggml_tensor* up = ggml_mul_mat(ctx0, model.layers[il].ffn_up, cur);
                 cb(up, "ffn_up", il);
 
                 auto g = ggml_cont(ctx0, ggml_view_2d(ctx0, up, up->ne[0] / 2, up->ne[1], ggml_row_size(up->type, up->ne[0]), 0));
@@ -9828,7 +9828,7 @@ struct llm_build_context {
                 y = ggml_mul(ctx0, y, ggml_silu(ctx0, g));
                 cb(y, "ffn_gate", il);
 
-                auto down = lora_mul_mat(lctx, ctx0, model.layers[il].ffn_down, y);
+                auto down = ggml_mul_mat(ctx0, model.layers[il].ffn_down, y);
                 cb(down, "ffn_down", il);
 
                 cur = down;
@@ -9847,7 +9847,7 @@ struct llm_build_context {
             LLM_NORM_RMS, cb, -1);
         cb(cur, "result_norm", -1);
 
-        cur = lora_mul_mat(lctx, ctx0, model.output, cur);
+        cur = ggml_mul_mat(ctx0, model.output, cur);
         cb(cur, "result_output", -1);
 
         ggml_build_forward_expand(gf, cur);
@@ -16279,7 +16279,7 @@ void llama_free_model(struct llama_model * model) {
 }
 
 
-std::map<std::string, lora_weights> get_lora_weights_map_cpp(struct ggml_context* ctx) {
+static std::map<std::string, lora_weights> get_lora_weights_map_cpp(struct ggml_context* ctx) {
     struct lora_tensor_pair* pair = build_lora_weights_map(ctx);
     std::map<std::string, lora_weights> map;
 
@@ -16352,11 +16352,8 @@ struct llama_context * llama_new_context_with_model(
     // Assign data 
     ctx->llora_data = *loras[0];
     
-    // extract lora ggml_tensor example. Maybe use it to build the map?
-
-    
+    // build the map?
     ctx->lora_weights_map = get_lora_weights_map_cpp((ctx->llora_data).ctx);
-    // Double check  the weights name, seems there is no lora appended
     std::vector<std::string> keys;
     for (const auto& pair : ctx->lora_weights_map) {
         keys.push_back(pair.first);
