@@ -16350,7 +16350,7 @@ struct llama_context * llama_new_context_with_model(
         fprintf(stderr, "warning: no lora adapters will be applied.\n");
     }
     // Assign data 
-    ctx->llora_data = *loras[0];
+    ctx->llora_data = *loras[0]; // could remove this
     
     // build the map?
     ctx->lora_weights_map = get_lora_weights_map_cpp((ctx->llora_data).ctx);

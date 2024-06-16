@@ -82,6 +82,8 @@ Are these layers you mentioned should not be finetuned?
 
 Is there an issue open for removing them? (I can take a look)
 
+[torch llama-2 lora layers](https://pytorch.org/torchtune/stable/tutorials/lora_finetune.html)
+
 
 
 
