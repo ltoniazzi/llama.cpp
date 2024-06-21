@@ -2355,6 +2355,31 @@ struct llama_control_vector {
     }
 };
 
+struct llama_hot_lora {
+    std::vector<struct ggml_tensor *> tensors; // per layer
+    std::vector<struct ggml_context *> ctxs;
+    std::vector<ggml_backend_buffer_t> bufs;
+
+    int32_t layer_start = -1;
+    int32_t layer_end   = -1;
+
+    ggml_tensor * tensor_for(int il) const {
+        if (il < 0 || il < layer_start || il > layer_end || (size_t) il >= tensors.size()) {
+            return nullptr;
+        }
+        return tensors[il];
+    }
+
+    ~llama_hot_lora() {
+        for (struct ggml_context * ctx : ctxs) {
+            ggml_free(ctx);
+        }
+        for (ggml_backend_buffer_t buf : bufs) {
+            ggml_backend_buffer_free(buf);
+        }
+    }
+};
+
 struct llama_vocab {
     using id    = int32_t;
     using token = std::string;
@@ -2791,6 +2816,24 @@ static bool llama_kv_cache_init(
         cache.k_l.push_back(k);
         cache.v_l.push_back(v);
     }
+
+    // Allocating Lora weights in the same buffer as model layers
+    // for (auto & lw_pair : ctx->lora_weights_map) {
+        // auto lora_weights = lw_pair.second;
+                // ggml_backend_buffer_type_t buft = buft_ctx_pair.first;
+    // for (int i = 0; i < (int) n_layer; i++) {
+    //         struct ggml_context * ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+    //         // Allocate space for every (say 5) lora pair in each layer
+    //         for (int n = 0; n < 5; n++) {
+    //             ggml_tensor * loraA = ggml_new_tensor_1d(ctx, type_k, 512*4);
+    //             ggml_tensor * loraB = ggml_new_tensor_1d(ctx, type_k, 512*4);
+    //             ggml_format_name(loraA, "cache_loraA_l%d%d", i, n);
+    //             ggml_format_name(loraB, "cache_loraB_l%d%d", i, n);
+    //             cache.k_l.push_back(loraA); 
+    //             cache.v_l.push_back(loraB);
+    //         }  
+    // }
+
 
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
     for (auto it : ctx_map) {
@@ -16352,15 +16395,14 @@ struct llama_context * llama_new_context_with_model(
     // Assign data 
     ctx->llora_data = *loras[0]; // could remove this
     
-    // build the map?
+    // build the map
     ctx->lora_weights_map = get_lora_weights_map_cpp((ctx->llora_data).ctx);
+    // Collect keys for debugging
     std::vector<std::string> keys;
     for (const auto& pair : ctx->lora_weights_map) {
-        keys.push_back(pair.first);
+        keys.push_back(pair.first); 
     }
 
-    
-    
     /// END LORA
 
     const auto & hparams = model->hparams;

@@ -22,6 +22,13 @@
 
 ### Current
 
+TODO: 
+- error because layers of model are off;oaded to gpu but hot lora still in cpu, so it brack as layers need to match buffer type. still need to clarifi the actual the layer is assocoated to buffer here (`llama_decode_internal`?)
+    `        llama_decode(lctx, llama_batch_get_one(tmp.data(), std::min(tmp.size(), (size_t) params.n_batch), 0, 0));`
+- think about KV cache structure
+- add hot lora separately to the buffer anf load to with tensor_set all independently of the rest. Then get back at slaren. Not sure how this plays with kv cache,
+- also understand kv cache size as it creates only one tensor per layer, does the size counts for what layers, where are the vectors actually loaded?
+
 - CPU: runs same performance as main (`make LLAMA_NO_METAL=1`)
 - M2: error (`make clean && make -j 8 `), to investigate/ask post error too, ask what is the issue with tensor format, or is it just finetune creating too many loras?
 
@@ -69,6 +76,11 @@ llama_new_context_with_model: graph splits = 2
 zsh: segmentation fault  ./main -m models/open-llama/ggml-model-q8_0.gguf -hl  -n 128
 ```
 
+
+```
+type_k = type_v = GGML_TYPE_F16
+kv_size = 2048
+```
 
 
 ### LoRA layers in fintuning
