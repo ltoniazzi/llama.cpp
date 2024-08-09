@@ -7812,6 +7812,45 @@ static void llm_build_kv_store(
     ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur, v_cache_view));
 }
 
+#include <iostream>
+// Function to print the tensor data
+// Check the printing in this example and see if it makes sense here
+// https://github.com/ggerganov/ggml/blob/master/examples/simple/simple-backend.cpp
+//  but this seems to try plot in column major order as blocking by columns
+// https://github.com/ggerganov/ggml/blob/master/examples/simple/simple-backend.cpp#L208
+void print_tensor_values(const ggml_tensor *tensor) {
+    // Assuming the tensor stores floats and is contiguous in memory
+    // float *data = reinterpret_cast<float*>(tensor->data);
+    std::vector<float> data(ggml_nelements(tensor));
+    // bring the data from the backend memory
+    ggml_backend_tensor_get(tensor, data.data(), 0, ggml_nbytes(tensor));
+
+
+    // Get the shape of the tensor
+    std::cout << std::endl;
+
+    std::cout << "Dimensions of " << tensor->name << ": ";
+    printf("(i=%d x j=%d) (transposed tensor):\n[", (int) tensor->ne[0], (int) tensor->ne[1]);
+    for (int j = 0; j < tensor->ne[1] /* rows */; j++) {
+        if (j > 0) {
+            printf("\n");
+        }
+
+        for (int i = 0; i < tensor->ne[0] /* cols */; i++) {
+            printf(" %.6f", data[j * tensor->ne[0] + i]);  // ?correct dim stored first which is the cols of the orig
+            // printf(" %.6f", data[i * tensor->ne[1] + j]);  // wrong for both base and lora layerss
+            if (i > 5) {
+                break;
+        }
+        }
+        if (j > 6) {
+            break;
+        }
+    }
+    printf(" ]\n");
+
+}
+
 // do mat_mul, while optionally apply lora
 static struct ggml_tensor * llm_build_lora_mm(
         struct llama_context & lctx,
@@ -7819,6 +7858,7 @@ static struct ggml_tensor * llm_build_lora_mm(
           struct ggml_tensor * w,
           struct ggml_tensor * cur) {
     struct ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
+    
     for (auto & it : lctx.lora_adapters) {
         struct llama_lora_weight * lora = it.first->get_weight(w);
         if (lora == nullptr) {
@@ -7827,6 +7867,10 @@ static struct ggml_tensor * llm_build_lora_mm(
         const float alpha = it.first->alpha;
         const float rank  = (float) lora->b->ne[0];
         const float scale = alpha ? it.second * alpha / rank : it.second;
+
+        print_tensor_values(w); // base layer
+        print_tensor_values(lora->a); // lora a
+        print_tensor_values(lora->b); // lora b
         struct ggml_tensor * ab_cur = ggml_mul_mat(
             ctx0, lora->b,
             ggml_mul_mat(ctx0, lora->a, cur)
