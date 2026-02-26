@@ -1,11 +1,9 @@
-// Tests for common_chat_truncate_messages.
+// Tests for chat_truncate_messages.
 //
 // Usage: test-chat-truncation <vocab.gguf>
 // e.g.:  test-chat-truncation models/ggml-vocab-llama-bpe.gguf
 
-#include "chat.h"
-#include "common.h"
-#include "llama.h"
+#include "server-common.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -107,8 +105,10 @@ static void test_noop(
     int32_t toks   = count_tokens(tmpls, vocab, inp);
     size_t  n_orig = inp.messages.size();
 
-    // n_ctx_slot >> toks, small n_predict → budget >> toks → no trigger
-    common_chat_truncate_messages(inp, tmpls, vocab, common_chat_max_prompt_tokens(toks * 10, 1, 0.8f));
+    // n_ctx >> toks, small n_predict → budget >> toks → no trigger
+    if (chat_needs_truncation(inp, tmpls, vocab, toks * 10, 1, 0.8f)) {
+        chat_truncate_messages(inp, tmpls, vocab, chat_target_tokens(toks * 10, 0.8f));
+    }
 
     check(inp.messages.size() == n_orig, "message count unchanged");
 }
@@ -136,7 +136,9 @@ static void test_basic_truncation(
     float   frac   = 0.9f;
 
     std::string prompt_before = render_prompt(tmpls, inp);
-    common_chat_truncate_messages(inp, tmpls, vocab, common_chat_max_prompt_tokens(n_ctx, n_pred, frac));
+    if (chat_needs_truncation(inp, tmpls, vocab, n_ctx, n_pred, frac)) {
+        chat_truncate_messages(inp, tmpls, vocab, chat_target_tokens(n_ctx, frac));
+    }
     std::string prompt_after  = render_prompt(tmpls, inp);
 
     fprintf(stderr, "  [KV-refresh] prompt before (%d chars):\n    %s\n",
@@ -179,7 +181,9 @@ static void test_n_predict_unlimited(
     {
         auto copy          = inp;
         std::string before = render_prompt(tmpls, copy);
-        common_chat_truncate_messages(copy, tmpls, vocab, common_chat_max_prompt_tokens(n_ctx, 1, frac));
+        if (chat_needs_truncation(copy, tmpls, vocab, n_ctx, 1, frac)) {
+            chat_truncate_messages(copy, tmpls, vocab, chat_target_tokens(n_ctx, frac));
+        }
 
         check(copy.messages.size() == inp.messages.size(),
               "n_predict=1: no truncation (budget >> n_tokens)");
@@ -191,7 +195,9 @@ static void test_n_predict_unlimited(
     {
         auto copy          = inp;
         std::string before = render_prompt(tmpls, copy);
-        common_chat_truncate_messages(copy, tmpls, vocab, common_chat_max_prompt_tokens(n_ctx, -1, frac));
+        if (chat_needs_truncation(copy, tmpls, vocab, n_ctx, -1, frac)) {
+            chat_truncate_messages(copy, tmpls, vocab, chat_target_tokens(n_ctx, frac));
+        }
 
         std::string after = render_prompt(tmpls, copy);
         fprintf(stderr, "  [KV-refresh] prompt before (%d chars):\n    %s\n",
@@ -234,8 +240,10 @@ static void test_multi_message_turn_removed_atomically(
 
     int32_t toks = count_tokens(tmpls, vocab, inp);
 
-    // Force trigger so that one removal is enough to fit
-    common_chat_truncate_messages(inp, tmpls, vocab, common_chat_max_prompt_tokens(toks, /*n_predict=*/1, /*frac=*/0.9f));
+    // Force trigger: n_ctx = toks, n_predict = 1 → threshold = toks-1 < toks → one removal fits
+    if (chat_needs_truncation(inp, tmpls, vocab, toks, /*n_predict=*/1, 0.9f)) {
+        chat_truncate_messages(inp, tmpls, vocab, chat_target_tokens(toks, 0.9f));
+    }
 
     fprintf(stderr, "  remaining messages after truncation:\n");
     for (size_t i = 0; i < inp.messages.size(); ++i) {
@@ -268,8 +276,9 @@ static void test_stop_when_no_user_messages(
     int32_t toks_all = toks;
 
     // Remove just the first turn; after that the remaining tokens should fit.
-    // We set max_prompt_tokens to just below the full count so exactly one removal fires.
-    common_chat_truncate_messages(inp, tmpls, vocab, toks_all - 1);
+    if (chat_needs_truncation(inp, tmpls, vocab, toks_all, /*n_predict=*/1, 0.9f)) {
+        chat_truncate_messages(inp, tmpls, vocab, chat_target_tokens(toks_all, 0.9f));
+    }
 
     check(inp.messages[0].role == "system",    "system preserved");
     check(inp.messages.back().content == "Short.", "last user turn preserved");
@@ -408,12 +417,12 @@ static void test_tool_call_orphan_after_truncation(
 
     int32_t toks = count_tokens(tmpls, vocab, inp);
 
-    // Trigger truncation: n_ctx = toks, n_predict = 1  →  max_prompt = toks-1
-    // so the prompt never fits and the while loop fires immediately.
-    // target = 0.9 * toks: user0 alone is well over 10 % of total tokens,
-    // so removing (user0 + assistant_tc) drops below target after one
-    // iteration, leaving tool_result orphaned at index 0.
-    common_chat_truncate_messages(inp, tmpls, vocab, common_chat_max_prompt_tokens(toks, /*n_predict=*/1, /*frac=*/0.9f));
+    // Trigger truncation: n_ctx = toks, n_predict = 1 → threshold = toks-1 < toks → fires.
+    // target = 0.9 * toks: user0 alone is well over 10% of total tokens,
+    // so removing the full turn drops below target after one iteration.
+    if (chat_needs_truncation(inp, tmpls, vocab, toks, /*n_predict=*/1, 0.9f)) {
+        chat_truncate_messages(inp, tmpls, vocab, chat_target_tokens(toks, 0.9f));
+    }
 
     // Print remaining sequence to make the failure easy to diagnose
     fprintf(stderr, "  remaining messages after truncation:\n");

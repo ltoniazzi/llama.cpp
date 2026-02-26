@@ -154,6 +154,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-llama-grammar.cpp)
     llama_build_and_test(test-chat.cpp)
     llama_build(test-chat-truncation.cpp)
+    target_link_libraries(test-chat-truncation PRIVATE server-context)
+    target_include_directories(test-chat-truncation PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
     llama_test(test-chat-truncation ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf)
     # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
     if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
