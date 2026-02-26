@@ -6,7 +6,7 @@ server: ServerProcess
 # ── shared content ────────────────────────────────────────────────────────────
 
 SYSTEM = "You are a helpful assistant."
-FINAL_USER = "This is the most recent question."
+FINAL_USER = "[U Last]This is the most recent user message."
 
 # Identifiable labels let us verify which turns survived in __verbose.prompt.
 def _user_msg(i: int) -> str:
@@ -16,12 +16,12 @@ def _asst_msg(i: int) -> str:
     return f"[A{i:02d}] Here is my explanation of topic {i}."
 
 
-def _long_messages(n_turns: int = 15) -> list[dict]:
+def _get_messages(n_turns: int = 128) -> list[dict]:
     """
     Build a multi-turn conversation long enough to overflow the per-slot context
     (tinyllama2 preset: n_ctx=512, n_slots=2 → 256 tokens per slot).
 
-    With 15 turns the rendered prompt is well above 256 tokens, so it triggers
+    With 128 turns the rendered prompt is well above 256 tokens, so it triggers
     both the context-exceeded error (no truncation) and the truncation logic
     (chat_truncate enabled).
     """
@@ -38,13 +38,26 @@ def _short_messages() -> list[dict]:
     A tiny conversation that fits comfortably below the truncation target
     (floor(fraction * 256) tokens).  Used to verify the no-op path.
     """
-    return [
-        {"role": "system",    "content": SYSTEM},
-        {"role": "user",      "content": "[U01] Hi"},
-        {"role": "assistant", "content": "[A01] Hello!"},
-        {"role": "user",      "content": FINAL_USER},
-    ]
+    return _get_messages(n_turns=1)
 
+def assert_turns_consistency_in_prompt(prompt: str):
+    """
+    Verify that the user and assistant turns in the rendered prompt are consistent
+    with the chat template, i.e. each user turn is followed by an assistant turn,
+    and the final user message is present.
+    And that no assistant message appears without its preceding user message (which would indicate a template breakage due to truncation).
+    """
+    turns = prompt.split("\n")
+    user_turns = [t for t in turns if t.startswith("[U")]
+    asst_turns = [t for t in turns if t.startswith("[A")]
+    assert len(user_turns) == len(asst_turns) + 1, "Each assistant turn should be preceded by a user turn, and there should be one extra user turn at the end"
+    assert SYSTEM in prompt, "The system message should be present in the prompt"
+    assert FINAL_USER in prompt, "The final user message should be present in the prompt"
+    for i in range(len(asst_turns)):
+        expected_asst = _asst_msg(i + 1)
+        if expected_asst in prompt:
+            expected_user = _user_msg(i + 1)
+            assert expected_user in prompt, f"User turn {i+1} should be present in the prompt as it precedes assistant turn {i+1}"
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
@@ -58,15 +71,14 @@ def create_server():
     #   get_n_predict_with_server_priority returns 5
     #   threshold = 256 - 5 = 251
     #   target    = floor(fraction * 256)
-    # Using fraction ≤ 251/256 ≈ 0.98 keeps target < threshold so the
-    # truncation loop always executes whenever chat_needs_truncation fires.
+    # So target = 204 with fraction=0.8.
     server.jinja = True
     server.chat_template = "chatml"  # stable, predictable __verbose.prompt format
 
 
 # ── tests ─────────────────────────────────────────────────────────────────────
 
-def test_chat_truncate_overflows_without_flag():
+def test_overflow_without_chat_truncate_flag():
     """
     Baseline: a long conversation exceeds the per-slot context when
     --chat-truncate is not set, returning a 400 exceed_context_size_error.
@@ -75,7 +87,7 @@ def test_chat_truncate_overflows_without_flag():
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "max_tokens": 5,
-        "messages": _long_messages(),
+        "messages": _get_messages(),
     })
     assert res.status_code == 400
     assert res.body["error"]["type"] == "exceed_context_size_error"
@@ -91,7 +103,7 @@ def test_chat_truncate_prevents_overflow():
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "max_tokens": 5,
-        "messages": _long_messages(),
+        "messages": _get_messages(),
     })
     assert res.status_code == 200
 
@@ -112,8 +124,8 @@ def test_chat_truncate_no_op():
     assert res.status_code == 200
     assert "__verbose" in res.body
     prompt = res.body["__verbose"]["prompt"]
-    assert "[U01]" in prompt, "Only turn should not be dropped"
-    assert FINAL_USER in prompt, "Last user message should be preserved"
+    assert "[U01]" in prompt, "No turn should not be dropped"
+    assert_turns_consistency_in_prompt(prompt)
 
 
 def test_chat_truncate_prompt_within_budget():
@@ -133,9 +145,10 @@ def test_chat_truncate_prompt_within_budget():
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "max_tokens": 5,
-        "messages": _long_messages(),
+        "messages": _get_messages(n_turns=100),  # even longer to ensure we exceed the target after truncation
     })
     assert res.status_code == 200
+    assert server.n_ctx is not None and server.n_slots is not None 
     per_slot_ctx = server.n_ctx // server.n_slots  # 256
     target = int(0.8 * per_slot_ctx)               # 204
     assert res.body["usage"]["prompt_tokens"] < target
@@ -152,11 +165,12 @@ def test_chat_truncate_system_preserved():
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "max_tokens": 5,
-        "messages": _long_messages(),
+        "messages": _get_messages(),
     })
     assert res.status_code == 200
     assert "__verbose" in res.body
-    assert SYSTEM in res.body["__verbose"]["prompt"]
+    prompt = res.body["__verbose"]["prompt"]
+    assert_turns_consistency_in_prompt(prompt)
 
 
 def test_chat_truncate_drops_oldest_keeps_newest():
@@ -170,10 +184,86 @@ def test_chat_truncate_drops_oldest_keeps_newest():
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "max_tokens": 5,
-        "messages": _long_messages(),
+        "messages": _get_messages(),
     })
     assert res.status_code == 200
     assert "__verbose" in res.body
     prompt = res.body["__verbose"]["prompt"]
     assert _user_msg(1) not in prompt, "Oldest user turn should be removed by truncation"
-    assert FINAL_USER in prompt, "Most recent user message should be preserved"
+    assert_turns_consistency_in_prompt(prompt)
+
+def test_chat_truncate_n_predict_threshold_vs_max_tokens():
+    """
+    The truncation threshold differs depending on whether max_tokens is in the request:
+
+        no max_tokens  → n_predict = server.n_predict = 64  → threshold = 256 - 64  = 192
+        max_tokens=5   → n_predict = 5                      → threshold = 256 - 5   = 251
+
+    We first probe to find n_turns whose true token count T satisfies:
+
+        target (204) < T < threshold_with_max5 (251)
+
+    Using max_tokens=1 for the probe makes its own threshold = 255 > 251, so the
+    probe itself never triggers truncation and gives us the true T.
+
+    With that conversation:
+    - Without max_tokens: threshold=192 < T → truncation fires, prompt < target
+    - With max_tokens=5:  threshold=251 > T → truncation silent, prompt unchanged
+    """
+    global server
+    server.chat_truncate = 0.8
+    server.start()
+
+    assert server.n_ctx is not None and server.n_slots is not None and server.n_predict is not None
+    per_slot_ctx       = server.n_ctx // server.n_slots            # 256
+    threshold_no_max   = per_slot_ctx - server.n_predict           # 192
+    threshold_with_max5 = per_slot_ctx - 5                         # 251
+    target             = int(server.chat_truncate * per_slot_ctx)  # 204
+
+    assert threshold_no_max < target < threshold_with_max5, (
+        "precondition: 192 < 204 < 251"
+    )
+
+    # ── discovery: find n_turns with target < T < threshold_with_max5 ──────────
+    found_n_turns  = None
+    found_n_tokens = None
+    for n_turns in range(1, 30):
+        probe = server.make_request("POST", "/chat/completions", data={
+            "max_tokens": 1,   # threshold=255 > 251, probe never truncates
+            "messages": _get_messages(n_turns),
+        })
+        if probe.status_code != 200:
+            break
+        pt = probe.body["usage"]["prompt_tokens"]
+        if target < pt < threshold_with_max5:
+            found_n_turns  = n_turns
+            found_n_tokens = pt
+            break
+
+    assert found_n_turns is not None, (
+        f"Could not find n_turns with {target} < prompt_tokens < {threshold_with_max5} "
+        f"in range 1-29"
+    )
+
+    msgs = _get_messages(found_n_turns)
+
+    # ── without max_tokens: threshold=192 < T → truncation fires ───────────────
+    res_no_max = server.make_request("POST", "/chat/completions", data={
+        "messages": msgs,
+    })
+    assert res_no_max.status_code == 200
+    assert res_no_max.body["usage"]["prompt_tokens"] < target, (
+        f"Expected truncation to reduce prompt below target={target}, "
+        f"got {res_no_max.body['usage']['prompt_tokens']}"
+    )
+
+    # ── with max_tokens=5: threshold=251 > T → truncation silent ───────────────
+    res_max5 = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 5,
+        "messages": msgs,
+    })
+    assert res_max5.status_code == 200
+    assert res_max5.body["usage"]["prompt_tokens"] == found_n_tokens, (
+        f"Expected no truncation (prompt preserved at {found_n_tokens}), "
+        f"got {res_max5.body['usage']['prompt_tokens']}"
+    )
