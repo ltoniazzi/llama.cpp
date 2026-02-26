@@ -294,7 +294,7 @@ struct server_chat_params {
     bool allow_audio;
     bool enable_thinking = true;
     std::string media_path;
-    int32_t n_ctx_slot = 0;
+    int32_t n_ctx = 0;
     int32_t n_predict = -1;
     float chat_truncation = -1.0f;
     const llama_vocab * vocab = nullptr;
@@ -307,7 +307,7 @@ json oaicompat_completion_params_parse(const json & body);
 // used by /chat/completions endpoint
 // When opt.vocab != nullptr and opt.chat_truncation > 0, oldest non-system turn pairs are
 // dropped from the message list until the rendered prompt fits within
-// opt.chat_truncation * opt.n_ctx_slot tokens (triggered only when prompt > n_ctx_slot - n_predict).
+// opt.chat_truncation * opt.n_ctx tokens (triggered only when prompt > n_ctx - n_predict).
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,

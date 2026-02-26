@@ -895,7 +895,7 @@ private:
                 /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
                 /* enable_thinking       */ enable_thinking,
                 /* media_path            */ params_base.media_path,
-                /* n_ctx_slot            */ (int32_t) llama_n_ctx_seq(ctx),
+                /* n_ctx                 */ (int32_t) llama_n_ctx_seq(ctx),
                 /* n_predict             */ params_base.n_predict,
                 /* chat_truncation       */ params_base.chat_truncation,
                 /* vocab                 */ vocab,

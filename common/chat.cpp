@@ -3358,7 +3358,7 @@ void common_chat_truncate_messages(
     common_chat_templates_inputs & inputs,
     const common_chat_templates  * tmpls,
     const struct llama_vocab     * vocab,
-    int32_t                        n_ctx_slot,
+    int32_t                        n_ctx,
     int32_t                        n_predict,
     float                          fraction)
 {
@@ -3371,15 +3371,15 @@ void common_chat_truncate_messages(
     auto tokens      = common_tokenize(vocab, chat_result.prompt, /* add_special */ true, /* parse_special */ true);
     int32_t n_tokens = (int32_t)tokens.size();
 
-    const int32_t target = (int32_t)(fraction * (float)n_ctx_slot);
+    const int32_t target = (int32_t)(fraction * (float)n_ctx);
 
     // Trigger: prompt would overflow the generation budget.
-    // When n_predict > 0: max prompt = n_ctx_slot - n_predict (leave explicit room for generation).
+    // When n_predict > 0: max prompt = n_ctx - n_predict (leave explicit room for generation).
     // When n_predict <= 0 (unlimited): use the fraction target itself as the trigger
-    //   As there is no known generation budget to reserve, so we keep the prompt within fraction * n_ctx_slot and
+    //   As there is no known generation budget to reserve, so we keep the prompt within fraction * n_ctx and
     //   let the remaining (1 - fraction) portion serve as the generation window.
     //   Note that this might endup retriggering truncation freqently -> move KV cache invalidation.
-    const int32_t max_prompt_tokens = (n_predict > 0) ? n_ctx_slot - n_predict : target;
+    const int32_t max_prompt_tokens = (n_predict > 0) ? n_ctx - n_predict : target;
     if (n_tokens <= max_prompt_tokens) {
         return; // prompt fits, no truncation needed
     }
