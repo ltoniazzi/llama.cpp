@@ -889,11 +889,7 @@ static void handle_media(
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files,
-    const struct llama_vocab * vocab,
-    int32_t                   n_ctx_slot,
-    int32_t                   n_predict_default,
-    float                     chat_truncation)
+    std::vector<raw_buffer> & out_files)
 {
     json llama_params;
 
@@ -1049,11 +1045,11 @@ json oaicompat_chat_params_parse(
 
     // Chat truncation: drop oldest non-system turn pairs until prompt fits in context
     // TODO is this a good/consistent place for the truncation to happen?
-    if (chat_truncation > 0.0f && vocab != nullptr && n_ctx_slot > 0) {
+    if (opt.chat_truncation > 0.0f && opt.vocab != nullptr && opt.n_ctx_slot > 0) {
         const int32_t n_predict_req = json_value(body, "max_tokens",
-                                        json_value(body, "n_predict", n_predict_default));
-        common_chat_truncate_messages(inputs, opt.tmpls.get(), vocab,
-                                      n_ctx_slot, n_predict_req, chat_truncation);
+                                        json_value(body, "n_predict", opt.n_predict));
+        common_chat_truncate_messages(inputs, opt.tmpls.get(), opt.vocab,
+                                      opt.n_ctx_slot, n_predict_req, opt.chat_truncation);
     }
 
     // if the assistant message appears at the end of list, we do not add end-of-turn token

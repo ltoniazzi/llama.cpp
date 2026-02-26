@@ -291,6 +291,7 @@ struct server_chat_params {
     int32_t n_ctx_slot = 0;
     int32_t n_predict = -1;
     float chat_truncation = -1.0f;
+    const llama_vocab * vocab = nullptr;
 };
 
 
@@ -298,15 +299,13 @@ struct server_chat_params {
 json oaicompat_completion_params_parse(const json & body);
 
 // used by /chat/completions endpoint
-// TODO Clean up this docstring: When vocab != nullptr and chat_truncation > 0, oldest non-system turn pairs are
+// When opt.vocab != nullptr and opt.chat_truncation > 0, oldest non-system turn pairs are
 // dropped from the message list until the rendered prompt fits within
-// chat_truncation * n_ctx_slot tokens (triggered only when prompt > n_ctx_slot - n_predict_default).
+// opt.chat_truncation * opt.n_ctx_slot tokens (triggered only when prompt > n_ctx_slot - n_predict).
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files,
-    const struct llama_vocab * vocab            = nullptr,
-);
+    std::vector<raw_buffer> & out_files);
 
 
 // convert OpenAI Responses API format to OpenAI Chat Completions API format

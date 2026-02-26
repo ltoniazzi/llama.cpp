@@ -895,9 +895,10 @@ private:
                 /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
                 /* enable_thinking       */ enable_thinking,
                 /* media_path            */ params_base.media_path,
-                /* n_ctx_slot            */ params_base.n_ctx,
+                /* n_ctx_slot            */ (int32_t) llama_n_ctx_seq(ctx),
                 /* n_predict             */ params_base.n_predict,
                 /* chat_truncation       */ params_base.chat_truncation,
+                /* vocab                 */ vocab,
             };
         }
 
@@ -3581,8 +3582,7 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files,
-            ctx_server.vocab);
+            files);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
@@ -3600,8 +3600,7 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files,
-            ctx_server.vocab);
+            files);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
@@ -3619,8 +3618,7 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files,
-            ctx_server.vocab);
+            files);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
