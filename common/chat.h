@@ -250,5 +250,3 @@ nlohmann::ordered_json common_chat_msg_diff_to_json_oaicompat(const common_chat_
 
 // get template caps, useful for reporting to server /props endpoint
 std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);
-
-
