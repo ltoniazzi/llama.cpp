@@ -1312,7 +1312,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_CONTEXT_SHIFT"));
     add_opt(common_arg(
         {"--ctx-truncation"}, "F",
-        "when chat prompt exceeds a target percentage of the context, keep the system message but drop oldest turns until prompt fits within F*n_ctx_seq tokens (0..1, default: disabled)",
+        "when the chat generation might exceed the context size, truncate by keeping the system message but dropping oldest turns until prompt fits within F*ctx_size tokens (0..1, default: disabled)",
         [](common_params & params, const std::string & value) {
             params.ctx_truncation = std::stof(value);
         }
