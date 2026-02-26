@@ -1046,10 +1046,9 @@ json oaicompat_chat_params_parse(
     // Chat truncation: drop oldest non-system turn pairs until prompt fits in context
     // TODO is this a good/consistent place for the truncation to happen?
     if (opt.chat_truncation > 0.0f) {
-        const int32_t n_predict_req = json_value(body, "max_tokens",
-                                        json_value(body, "n_predict", opt.n_predict));
+        // TODO rename n_ctx_slot
         common_chat_truncate_messages(inputs, opt.tmpls.get(), opt.vocab,
-                                      opt.n_ctx_slot, n_predict_req, opt.chat_truncation);
+                                      opt.n_ctx_slot, get_n_predict(body, opt.n_predict), opt.chat_truncation);
     }
 
     // if the assistant message appears at the end of list, we do not add end-of-turn token

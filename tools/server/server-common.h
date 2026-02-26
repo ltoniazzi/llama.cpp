@@ -44,6 +44,12 @@ static T json_value(const json & body, const std::string & key, const T & defaul
     }
 }
 
+// Resolves the requested number of tokens to predict from a request body.
+// "n_predict" takes priority over "max_tokens" (OAI alias); falls back to default_n_predict.
+static inline int32_t get_n_predict(const json & body, int32_t default_n_predict) {
+    return json_value(body, "n_predict", json_value(body, "max_tokens", default_n_predict));
+}
+
 // https://community.openai.com/t/openai-chat-list-of-error-codes-and-types/357791/11
 enum error_type {
     ERROR_TYPE_INVALID_REQUEST,
