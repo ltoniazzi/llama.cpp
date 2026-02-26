@@ -3354,57 +3354,67 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
     return chat_templates->template_default->caps.to_map();
 }
 
-int32_t common_chat_max_prompt_tokens(int32_t n_ctx, int32_t n_predict, float fraction) {
-    const int32_t target = (int32_t)(fraction * (float)n_ctx);
-    return (n_predict > 0) ? n_ctx - n_predict : target;
+int32_t common_chat_target_tokens(int32_t n_ctx, float fraction) {
+    return (int32_t)(fraction * (float)n_ctx);
+}
+
+static int32_t compute_n_tokens_from_chat_params(const struct llama_vocab * vocab, const common_chat_params & chat_params) {
+    // TODO how expensive is it to tokenise the prompt?
+    auto tokens = common_tokenize(vocab, chat_params.prompt, true, true);
+    return (int32_t)tokens.size();
+}
+
+int32_t common_chat_n_tokens(
+    const common_chat_templates_inputs & inputs,
+    const common_chat_templates        * tmpls,
+    const struct llama_vocab           * vocab)
+{
+    return compute_n_tokens_from_chat_params(vocab, common_chat_templates_apply(tmpls, inputs));
+}
+
+bool common_chat_needs_truncation(
+    const common_chat_templates_inputs & inputs,
+    const common_chat_templates        * tmpls,
+    const struct llama_vocab           * vocab,
+    int32_t n_ctx, int32_t n_predict, float fraction)
+{
+    const int32_t n_tokens  = common_chat_n_tokens(inputs, tmpls, vocab);
+    const int32_t threshold = (n_predict > 0) ? n_ctx - n_predict : common_chat_target_tokens(n_ctx, fraction);
+    return n_tokens >= threshold;
 }
 
 void common_chat_truncate_messages(
     common_chat_templates_inputs & inputs,
     const common_chat_templates  * tmpls,
     const struct llama_vocab     * vocab,
-    int32_t                        max_prompt_tokens)
+    int32_t                        target_tokens)
 {
     GGML_ASSERT(tmpls  != nullptr);
     GGML_ASSERT(vocab  != nullptr);
 
-    // Render current prompt and count tokens
-    auto chat_result = common_chat_templates_apply(tmpls, inputs);
-    // TODO who expensive is to tokenise the prompt?
-    auto tokens      = common_tokenize(vocab, chat_result.prompt, /* add_special */ true, /* parse_special */ true);
-    int32_t n_tokens = (int32_t)tokens.size();
+    int32_t n_tokens = common_chat_n_tokens(inputs, tmpls, vocab);
 
-    if (n_tokens <= max_prompt_tokens) {
-        return; // prompt fits, no truncation needed
-    }
-
-    while (n_tokens > max_prompt_tokens) {
-        // Find the first non-system message index
-        size_t first_non_sys = 0;
-        while (first_non_sys < inputs.messages.size() &&
-               inputs.messages[first_non_sys].role == "system") {
-            ++first_non_sys;
+    while (n_tokens >= target_tokens) {
+        // Find the first user message index
+        size_t first_user_msg = -1;
+        for (size_t index = 0; index < inputs.messages.size(); ++index) {
+            if (inputs.messages[index].role == "user") {
+                first_user_msg = index;
+                break;
+            }
         }
 
-        // Stop if only one non-system message remains (must keep last user turn)
-        const size_t non_sys_count = inputs.messages.size() - first_non_sys;
-        if (non_sys_count <= 1) {
+        // Stop if there is no user message
+        if (first_user_msg == (size_t)-1) {
             break;
         }
 
-        // Remove the oldest non-system message (user turn)
-        inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_non_sys);
-
-        // If the message now at that position is an assistant reply, remove it too
-        // TODO Should consider more complete sequence, tool calls etc. How to find valid patterns to remove?
-        if (first_non_sys < inputs.messages.size() &&
-            inputs.messages[first_non_sys].role == "assistant") {
-            inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_non_sys);
+        // Remove all messages until we meet another user message
+        inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_user_msg); 
+        while (inputs.messages[first_user_msg].role != "user" && first_user_msg < inputs.messages.size()) {
+                inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_user_msg); 
         }
 
-        // Re-render and re-count
-        chat_result = common_chat_templates_apply(tmpls, inputs);
-        tokens      = common_tokenize(vocab, chat_result.prompt, true, true);
-        n_tokens    = (int32_t)tokens.size();
+        n_tokens = compute_n_tokens_from_chat_params(vocab, common_chat_templates_apply(tmpls, inputs));
     }
 }

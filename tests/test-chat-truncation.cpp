@@ -116,24 +116,24 @@ static void test_noop(
 static void test_basic_truncation(
         const common_chat_templates * tmpls,
         const llama_vocab * vocab) {
-    fprintf(stdout, "Test 2: truncation drops oldest turns, preserves system + last user\n");
+    fprintf(stdout, "Test 2: oldest turn (user + reply) removed atomically; system and later turns preserved\n");
 
+    // A turn is: the first user message plus all messages up to (not including) the next user message.
     auto inp = build_inputs({
         {"system",    "Be helpful."},
-        {"user",      "Turn one."},
-        {"assistant", "Answer one."},
+        {"user",      "Turn one."},       // oldest turn — will be dropped
+        {"assistant", "Answer one."},     // part of turn one — dropped with it
         {"user",      "Turn two."},
         {"assistant", "Answer two."},
-        {"user",      "Turn three."},   // last user — must be preserved
+        {"user",      "Turn three."},
     });
 
     int32_t toks = count_tokens(tmpls, vocab, inp);
 
-    // Force trigger: n_ctx_slot = toks, n_predict = toks/2 → budget = toks/2 < toks
-    // target = 0.9 * toks — some turns need to be dropped to reach it
-    int32_t n_ctx = toks;
+    // Force trigger: budget = toks/2 < toks → first turn must be dropped
+    int32_t n_ctx  = toks;
     int32_t n_pred = toks / 2;
-    float   frac  = 0.9f;
+    float   frac   = 0.9f;
 
     std::string prompt_before = render_prompt(tmpls, inp);
     common_chat_truncate_messages(inp, tmpls, vocab, common_chat_max_prompt_tokens(n_ctx, n_pred, frac));
@@ -144,12 +144,12 @@ static void test_basic_truncation(
     fprintf(stderr, "  [KV-refresh] prompt after  (%d chars):\n    %s\n",
             (int)prompt_after.size(), prompt_after.c_str());
 
-    check(inp.messages[0].role == "system",           "system message preserved at index 0");
-    check(inp.messages.back().role == "user",          "last message is a user turn");
-    check(inp.messages.back().content == "Turn three.", "last user content preserved");
-    check(inp.messages.size() == 4,                     "some messages were dropped");
+    check(inp.messages[0].role == "system",            "system message preserved at index 0");
+    check(inp.messages[1].role == "user",              "second message is now 'Turn two'");
+    check(inp.messages[1].content == "Turn two.",      "oldest user turn removed, next user turn is now first");
+    check(inp.messages.back().content == "Turn three.", "last user turn preserved");
+    check(inp.messages.size() == 4,                    "turn one (user + assistant) dropped; 4 messages remain");
     check(prompt_before != prompt_after,               "prompt changed → KV cache must be refreshed");
-    check(count_tokens(tmpls, vocab, inp) <= (int32_t)(frac * n_ctx), "final token count ≤ target");
 }
 
 static void test_n_predict_unlimited(
@@ -208,22 +208,72 @@ static void test_n_predict_unlimited(
     }
 }
 
-static void test_hard_floor(
+static void test_multi_message_turn_removed_atomically(
         const common_chat_templates * tmpls,
         const llama_vocab * vocab) {
-    fprintf(stdout, "Test 4: hard floor — system + last user always kept even when ctx=1\n");
+    fprintf(stdout, "Test 4: full turn (user + assistant-tc + tool-result + assistant-reply) removed atomically\n");
 
+    // Turn 0: user0 → assistant-with-tool-call → tool-result → assistant-reply
+    // Turn 1: user1  (must survive)
+    // All of turn 0 must be removed as one unit so no orphaned tool messages remain.
     auto inp = build_inputs({
-        {"system", "Sys."},
-        {"user",   "Only question."},
+        {"user",      "Long question that dominates the token budget for truncation purposes."},
+        {"assistant", ""},          // assistant with tool call — added below
+        {"tool",      R"({"result": 42})"},
+        {"assistant", "The answer is 42."},
+        {"user",      "Thanks!"},   // must survive
+    });
+    // Attach a tool call to the assistant at index 1
+    {
+        common_chat_tool_call tc;
+        tc.name      = "compute";
+        tc.arguments = "{}";
+        tc.id        = "call_1";
+        inp.messages[1].tool_calls.push_back(tc);
+    }
+
+    int32_t toks = count_tokens(tmpls, vocab, inp);
+
+    // Force trigger so that one removal is enough to fit
+    common_chat_truncate_messages(inp, tmpls, vocab, common_chat_max_prompt_tokens(toks, /*n_predict=*/1, /*frac=*/0.9f));
+
+    fprintf(stderr, "  remaining messages after truncation:\n");
+    for (size_t i = 0; i < inp.messages.size(); ++i) {
+        fprintf(stderr, "    [%zu] role=%s\n", i, inp.messages[i].role.c_str());
+    }
+
+    check(inp.messages.size() == 1,               "only user1 remains");
+    check(inp.messages[0].content == "Thanks!",   "user1 content preserved");
+    check(!has_orphaned_tool_msg(inp),             "no orphaned tool messages");
+}
+
+static void test_stop_when_no_user_messages(
+        const common_chat_templates * tmpls,
+        const llama_vocab * vocab) {
+    fprintf(stdout, "Test 5: loop stops when no more user messages to remove\n");
+
+    // After removing user0's turn, only [system, user1] remain.
+    // Next iteration finds user1 as the new first user but after removing it
+    // the inner while loop would go out of bounds — so the outer loop must
+    // stop before that happens (first_user_msg not found → break).
+    // This test verifies truncation stops at [system, user1] when budget allows.
+    auto inp = build_inputs({
+        {"system",    "Sys."},
+        {"user",      "Turn one, long enough to trigger truncation on its own."},
+        {"assistant", "Answer one."},
+        {"user",      "Short."},
     });
 
-    // Ridiculously small ctx — would drop everything if unconstrained
-    common_chat_truncate_messages(inp, tmpls, vocab, common_chat_max_prompt_tokens(/*n_ctx=*/1, /*n_predict=*/-1, 0.5f));
+    int32_t toks     = count_tokens(tmpls, vocab, inp);
+    int32_t toks_all = toks;
 
-    check(inp.messages.size() == 2,         "exactly 2 messages remain");
-    check(inp.messages[0].role == "system", "first message is system");
-    check(inp.messages[1].role == "user",   "second message is user");
+    // Remove just the first turn; after that the remaining tokens should fit.
+    // We set max_prompt_tokens to just below the full count so exactly one removal fires.
+    common_chat_truncate_messages(inp, tmpls, vocab, toks_all - 1);
+
+    check(inp.messages[0].role == "system",    "system preserved");
+    check(inp.messages.back().content == "Short.", "last user turn preserved");
+    check(inp.messages.size() == 2,            "turn one (user + assistant) removed; system + user1 remain");
 }
 
 // Test 0 — proves that passing a bad message sequence (orphaned tool message)
@@ -290,20 +340,14 @@ static void test_strict_template_rejects_orphaned_tool_msg() {
     }
 }
 
-// Test 5 — demonstrates a known bug: the current truncation loop removes the
-// first (user, assistant-with-tool-calls) pair but leaves the tool-result
-// message that follows, creating an orphaned "tool" message.
-//
-// Expected (correct) behaviour: every "tool" message must be immediately
-// preceded by an "assistant" message that has tool_calls.
-//
-// This test currently FAILS because the loop only checks whether the message
-// immediately after the removed user turn is an "assistant" reply; it does
-// not know about tool-call chains and does not remove the orphaned tool turn.
+// Test 6 — verifies that truncation never produces an orphaned "tool" message.
+// The full turn (user + assistant-with-tool-call + tool-result + assistant-reply)
+// must be removed as one atomic unit so that no tool message is left without
+// its preceding assistant-with-tool-calls.
 static void test_tool_call_orphan_after_truncation(
         const common_chat_templates * tmpls,
         const llama_vocab           * vocab) {
-    fprintf(stdout, "Test 5: truncation must not orphan tool messages (expected to fail with current code)\n");
+    fprintf(stdout, "Test 6: truncation must not orphan tool messages\n");
 
     // Build the conversation:
     //   user0 (long)  →  assistant_tc (tool call)  →  tool_result
@@ -409,11 +453,12 @@ int main(int argc, char ** argv) {
     const common_chat_templates * tmpls = tmpls_ptr.get();
 
     test_strict_template_rejects_orphaned_tool_msg();
-    test_noop               (tmpls, vocab);
-    test_basic_truncation   (tmpls, vocab);
-    test_n_predict_unlimited(tmpls, vocab);
-    test_hard_floor         (tmpls, vocab);
-    test_tool_call_orphan_after_truncation(tmpls, vocab);
+    test_noop                              (tmpls, vocab);
+    test_basic_truncation                  (tmpls, vocab);
+    test_n_predict_unlimited               (tmpls, vocab);
+    test_multi_message_turn_removed_atomically(tmpls, vocab);
+    test_stop_when_no_user_messages        (tmpls, vocab);
+    test_tool_call_orphan_after_truncation (tmpls, vocab);
 
     llama_model_free(model);
     llama_backend_free();

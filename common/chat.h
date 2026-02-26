@@ -251,12 +251,25 @@ nlohmann::ordered_json common_chat_msg_diff_to_json_oaicompat(const common_chat_
 // get template caps, useful for reporting to server /props endpoint
 std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);
 
-// TODO describe and move to server comm
-int32_t common_chat_max_prompt_tokens(int32_t n_ctx, int32_t n_predict, float fraction);
+// TODO write docstring
+int32_t common_chat_target_tokens(int32_t n_ctx, float fraction);
+
+// TODO write docstring
+int32_t common_chat_n_tokens(
+    const common_chat_templates_inputs & inputs,
+    const common_chat_templates        * tmpls,
+    const struct llama_vocab           * vocab);
+
+// TODO write docstring
+bool common_chat_needs_truncation(
+    const common_chat_templates_inputs & inputs,
+    const common_chat_templates        * tmpls,
+    const struct llama_vocab           * vocab,
+    int32_t n_ctx, int32_t n_predict, float fraction);
 
 // TODO describe and move to server comm
 void common_chat_truncate_messages(
     common_chat_templates_inputs & inputs,
     const common_chat_templates * tmpls,
     const struct llama_vocab    * vocab,
-    int32_t                       max_prompt_tokens);
+    int32_t                       target_tokens);
