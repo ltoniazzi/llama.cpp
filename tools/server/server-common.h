@@ -387,3 +387,30 @@ server_tokens format_prompt_rerank(
         mtmd_context * mctx,
         const std::string & query,
         const std::string & doc);
+
+//
+// Chat truncation helpers
+//
+
+// TODO write docstring
+int32_t chat_target_tokens(int32_t n_ctx, float fraction);
+
+// TODO write docstring
+int32_t chat_n_tokens(
+    const common_chat_templates_inputs & inputs,
+    const common_chat_templates        * tmpls,
+    const struct llama_vocab           * vocab);
+
+// TODO write docstring
+bool chat_needs_truncation(
+    const common_chat_templates_inputs & inputs,
+    const common_chat_templates        * tmpls,
+    const struct llama_vocab           * vocab,
+    int32_t n_ctx, int32_t n_predict, float fraction);
+
+// TODO write docstring
+void chat_truncate_messages(
+    common_chat_templates_inputs & inputs,
+    const common_chat_templates  * tmpls,
+    const struct llama_vocab     * vocab,
+    int32_t                        target_tokens);

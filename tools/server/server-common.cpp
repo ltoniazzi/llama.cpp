@@ -1046,8 +1046,8 @@ json oaicompat_chat_params_parse(
     // Chat truncation: drop oldest non-system turn pairs until prompt fits in context
     // TODO is this a good/consistent place for the truncation to happen?
     if (opt.chat_truncation > 0.0f) {
-        if (common_chat_needs_truncation(inputs, opt.tmpls.get(), opt.vocab, opt.n_ctx, get_n_predict_budgeted(body, opt.n_predict), opt.chat_truncation)) {
-            common_chat_truncate_messages(inputs, opt.tmpls.get(), opt.vocab, common_chat_target_tokens(opt.n_ctx, opt.chat_truncation));
+        if (chat_needs_truncation(inputs, opt.tmpls.get(), opt.vocab, opt.n_ctx, get_n_predict_budgeted(body, opt.n_predict), opt.chat_truncation)) {
+            chat_truncate_messages(inputs, opt.tmpls.get(), opt.vocab, chat_target_tokens(opt.n_ctx, opt.chat_truncation));
         }
     }
 
@@ -2045,4 +2045,74 @@ server_tokens format_prompt_rerank(
     }
 
     return result;
+}
+
+//
+// Chat truncation helpers
+//
+
+static int32_t compute_n_tokens_from_chat_params(const struct llama_vocab * vocab, const common_chat_params & chat_params) {
+    // TODO how expensive is it to tokenise the prompt?
+    auto tokens = common_tokenize(vocab, chat_params.prompt, true, true);
+    return (int32_t)tokens.size();
+}
+
+int32_t chat_target_tokens(int32_t n_ctx, float fraction) {
+    return (int32_t)(fraction * (float)n_ctx);
+}
+
+
+int32_t chat_n_tokens(
+    const common_chat_templates_inputs & inputs,
+    const common_chat_templates        * tmpls,
+    const struct llama_vocab           * vocab)
+{
+    return compute_n_tokens_from_chat_params(vocab, common_chat_templates_apply(tmpls, inputs));
+}
+
+bool chat_needs_truncation(
+    const common_chat_templates_inputs & inputs,
+    const common_chat_templates        * tmpls,
+    const struct llama_vocab           * vocab,
+    int32_t n_ctx, int32_t n_predict, float fraction)
+{
+    const int32_t n_tokens  = chat_n_tokens(inputs, tmpls, vocab);
+    const int32_t threshold = (n_predict > 0) ? n_ctx - n_predict : chat_target_tokens(n_ctx, fraction);
+    return n_tokens >= threshold;
+}
+
+void chat_truncate_messages(
+    common_chat_templates_inputs & inputs,
+    const common_chat_templates  * tmpls,
+    const struct llama_vocab     * vocab,
+    int32_t                        target_tokens)
+{
+    GGML_ASSERT(tmpls  != nullptr);
+    GGML_ASSERT(vocab  != nullptr);
+
+    int32_t n_tokens = chat_n_tokens(inputs, tmpls, vocab);
+
+    while (n_tokens >= target_tokens) {
+        // Find the first user message index
+        size_t first_user_msg = -1;
+        for (size_t index = 0; index < inputs.messages.size(); ++index) {
+            if (inputs.messages[index].role == "user") {
+                first_user_msg = index;
+                break;
+            }
+        }
+
+        // Stop if there is no user message
+        if (first_user_msg == (size_t)-1) {
+            break;
+        }
+
+        // Remove all messages until we meet another user message
+        inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_user_msg);
+        while (inputs.messages[first_user_msg].role != "user" && first_user_msg < inputs.messages.size()) {
+            inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_user_msg);
+        }
+
+        n_tokens = compute_n_tokens_from_chat_params(vocab, common_chat_templates_apply(tmpls, inputs));
+    }
 }
