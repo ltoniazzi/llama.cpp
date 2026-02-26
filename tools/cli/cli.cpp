@@ -68,7 +68,7 @@ struct cli_context {
         defaults.timings_per_token = true; // in order to get timings even when we cancel mid-way
         // defaults.return_progress = true; // TODO: show progress
 
-        verbose_prompt   = params.verbose_prompt;
+        verbose_prompt = params.verbose_prompt;
     }
 
     std::string generate_completion(result_timings & out_timings) {
