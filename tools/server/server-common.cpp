@@ -1043,7 +1043,7 @@ json oaicompat_chat_params_parse(
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
-    // Chat truncation: drop oldest non-system turn pairs until prompt fits in context
+    // Chat truncation: drop oldest turns until prompt fits in context
     if (opt.chat_truncate > 0.0f) {
         int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
         if (
@@ -1054,12 +1054,8 @@ json oaicompat_chat_params_parse(
                 opt.chat_truncate
             )
         ) {
-            chat_truncate_messages(
-                inputs, 
-                opt.tmpls.get(), 
-                opt.vocab, 
-                chat_truncate_target_tokens(opt.n_ctx, opt.chat_truncate, n_predict_with_server_priority)
-            );
+            int32_t target_tokens = chat_truncate_target_tokens(opt.n_ctx, opt.chat_truncate, n_predict_with_server_priority);
+            chat_truncate_messages(inputs, opt.tmpls.get(), opt.vocab, target_tokens);
         }
     }
 
@@ -2107,18 +2103,18 @@ void chat_truncate_messages(
 
     while (n_tokens >= target_tokens) {
         // Find the first user message index and count all user messages
-        size_t first_user_msg = (size_t)-1;
-        size_t user_count     = 0;
+        size_t first_user_msg = -1;
+        size_t user_count = 0;
         for (size_t index = 0; index < inputs.messages.size(); ++index) {
             if (inputs.messages[index].role == "user") {
-                if (first_user_msg == (size_t)-1) {
+                if (first_user_msg == -1) {
                     first_user_msg = index;
                 }
                 user_count++;
             }
         }
 
-        // Stop if there are no user messages, or only the last one remains (preserve it)
+        // Stop if there are 1 or 0 user messages
         if (user_count <= 1) {
             break;
         }

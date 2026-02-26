@@ -389,7 +389,7 @@ server_tokens format_prompt_rerank(
         const std::string & doc);
 
 //
-// Chat truncation helpers
+// Chat truncation utils
 //
 
 // Calculate the target number of tokens to keep in the chat history as the floor of context size * the chat_truncate fraction.
@@ -410,6 +410,7 @@ bool chat_needs_truncation(
 
 // Remove oldest "turns" from the chat history until the number of tokens is within the target_tokens limit
 // Each "turn" is a sequence of messages starting with `user` and ending just before the next `user` message.
+// The most recent turn is always kept.
 // This guarantees we do not break/pollute the chat template
 void chat_truncate_messages(
     common_chat_templates_inputs & inputs,
