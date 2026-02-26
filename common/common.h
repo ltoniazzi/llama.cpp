@@ -473,9 +473,7 @@ struct common_params {
     bool ctx_shift         = false; // context shift on infinite text generation
     bool swa_full          = false; // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
     bool kv_unified        = false; // enable unified KV cache
-    
-    float ctx_truncation   = -1.0f; // fraction of n_ctx_slot to target after chat truncation (-1 = disabled)
-    
+   
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
     bool use_mmap          = true;  // enable mmap to use filesystem cache
     bool use_direct_io     = false; // read from disk without buffering
@@ -525,7 +523,8 @@ struct common_params {
     bool    cache_prompt      = true;         // whether to enable prompt caching
     int32_t n_ctx_checkpoints = 8;            // max number of context checkpoints per slot
     int32_t cache_ram_mib     = 8192;         // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
-
+    float chat_truncation   = -1.0f;          // fraction of n_ctx_slot to target after chat truncation (-1 = disabled)
+    
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";                                                                         // NOLINT
     std::string api_prefix    = "";                                                                         // NOLINT

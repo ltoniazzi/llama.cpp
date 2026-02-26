@@ -3582,7 +3582,7 @@ void server_routes::init_routes() {
             ctx_server.vocab,
             meta->slot_n_ctx,
             params.n_predict,
-            params.ctx_truncation);
+            params.chat_truncation);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
@@ -3604,7 +3604,7 @@ void server_routes::init_routes() {
             ctx_server.vocab,
             meta->slot_n_ctx,
             params.n_predict,
-            params.ctx_truncation);
+            params.chat_truncation);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
@@ -3626,7 +3626,7 @@ void server_routes::init_routes() {
             ctx_server.vocab,
             meta->slot_n_ctx,
             params.n_predict,
-            params.ctx_truncation);
+            params.chat_truncation);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,

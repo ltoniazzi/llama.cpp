@@ -3377,7 +3377,7 @@ void common_chat_truncate_messages(
     // When n_predict > 0: max prompt = n_ctx_slot - n_predict (leave explicit room for generation).
     // When n_predict <= 0 (unlimited): use the fraction target itself as the trigger
     //   As there is no known generation budget to reserve, so we keep the prompt within fraction * n_ctx_slot and
-    //   let the remaining (1 - fraction) portion serve as the generation window. 
+    //   let the remaining (1 - fraction) portion serve as the generation window.
     //   Note that this might endup retriggering truncation freqently -> move KV cache invalidation.
     const int32_t max_prompt_tokens = (n_predict > 0) ? n_ctx_slot - n_predict : target;
     if (n_tokens <= max_prompt_tokens) {
