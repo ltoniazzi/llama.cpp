@@ -1045,7 +1045,7 @@ json oaicompat_chat_params_parse(
 
     // Chat truncation: drop oldest non-system turn pairs until prompt fits in context
     // TODO is this a good/consistent place for the truncation to happen?
-    if (opt.chat_truncation > 0.0f && opt.vocab != nullptr && opt.n_ctx_slot > 0) {
+    if (opt.chat_truncation > 0.0f) {
         const int32_t n_predict_req = json_value(body, "max_tokens",
                                         json_value(body, "n_predict", opt.n_predict));
         common_chat_truncate_messages(inputs, opt.tmpls.get(), opt.vocab,
