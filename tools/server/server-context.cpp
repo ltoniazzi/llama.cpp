@@ -895,6 +895,9 @@ private:
                 /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
                 /* enable_thinking       */ enable_thinking,
                 /* media_path            */ params_base.media_path,
+                /* n_ctx_slot            */ params_base.n_ctx,
+                /* n_predict             */ params_base.n_predict,
+                /* chat_truncation       */ params_base.chat_truncation,
             };
         }
 
@@ -3579,10 +3582,7 @@ void server_routes::init_routes() {
             body,
             meta->chat_params,
             files,
-            ctx_server.vocab,
-            meta->slot_n_ctx,
-            params.n_predict,
-            params.chat_truncation);
+            ctx_server.vocab);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
@@ -3601,10 +3601,7 @@ void server_routes::init_routes() {
             body,
             meta->chat_params,
             files,
-            ctx_server.vocab,
-            meta->slot_n_ctx,
-            params.n_predict,
-            params.chat_truncation);
+            ctx_server.vocab);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
@@ -3623,10 +3620,7 @@ void server_routes::init_routes() {
             body,
             meta->chat_params,
             files,
-            ctx_server.vocab,
-            meta->slot_n_ctx,
-            params.n_predict,
-            params.chat_truncation);
+            ctx_server.vocab);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
