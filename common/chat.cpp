@@ -3353,3 +3353,59 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
     GGML_ASSERT(chat_templates->template_default != nullptr);
     return chat_templates->template_default->caps.to_map();
 }
+
+void common_chat_truncate_messages(
+    common_chat_templates_inputs & inputs,
+    const common_chat_templates  * tmpls,
+    const struct llama_vocab     * vocab,
+    int32_t                        n_ctx_slot,
+    int32_t                        n_predict,
+    float                          fraction)
+{
+    GGML_ASSERT(tmpls  != nullptr);
+    GGML_ASSERT(vocab  != nullptr);
+    GGML_ASSERT(fraction > 0.0f && fraction <= 1.0f);
+
+    // Render current prompt and count tokens
+    auto chat_result = common_chat_templates_apply(tmpls, inputs);
+    auto tokens      = common_tokenize(vocab, chat_result.prompt, /* add_special */ true, /* parse_special */ true);
+    int32_t n_tokens = (int32_t)tokens.size();
+
+    // Trigger: prompt would overflow generation budget
+    // TODO need to think if it's safe, as we might then cross context window when n_predict = -1
+    const int32_t budget = n_ctx_slot - std::max(n_predict, 0);
+    if (n_tokens <= budget) {
+        return; // no truncation needed
+    }
+
+    const int32_t target = (int32_t)(fraction * (float)n_ctx_slot);
+
+    while (n_tokens > target) {
+        // Find the first non-system message index
+        size_t first_non_sys = 0;
+        while (first_non_sys < inputs.messages.size() &&
+               inputs.messages[first_non_sys].role == "system") {
+            ++first_non_sys;
+        }
+
+        // Stop if only one non-system message remains (must keep last user turn)
+        const size_t non_sys_count = inputs.messages.size() - first_non_sys;
+        if (non_sys_count <= 1) {
+            break;
+        }
+
+        // Remove the oldest non-system message (user turn)
+        inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_non_sys);
+
+        // If the message now at that position is an assistant reply, remove it too
+        if (first_non_sys < inputs.messages.size() &&
+            inputs.messages[first_non_sys].role == "assistant") {
+            inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_non_sys);
+        }
+
+        // Re-render and re-count
+        chat_result = common_chat_templates_apply(tmpls, inputs);
+        tokens      = common_tokenize(vocab, chat_result.prompt, true, true);
+        n_tokens    = (int32_t)tokens.size();
+    }
+}

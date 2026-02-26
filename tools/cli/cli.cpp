@@ -53,6 +53,7 @@ struct cli_context {
     std::vector<raw_buffer> input_files;
     task_params defaults;
     bool verbose_prompt;
+    float ctx_truncation; // fraction target for chat truncation (-1 = disabled)
 
     // thread for showing "loading" animation
     std::atomic<bool> loading_show;
@@ -68,7 +69,8 @@ struct cli_context {
         defaults.timings_per_token = true; // in order to get timings even when we cancel mid-way
         // defaults.return_progress = true; // TODO: show progress
 
-        verbose_prompt = params.verbose_prompt;
+        verbose_prompt   = params.verbose_prompt;
+        ctx_truncation   = params.ctx_truncation;
     }
 
     std::string generate_completion(result_timings & out_timings) {
@@ -189,6 +191,12 @@ struct cli_context {
         inputs.parallel_tool_calls   = false;
         inputs.add_generation_prompt = true;
         inputs.enable_thinking       = chat_params.enable_thinking;
+
+        if (ctx_truncation > 0.0f) {
+            const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx_server.get_llama_context()));
+            common_chat_truncate_messages(inputs, chat_params.tmpls.get(), vocab,
+                                          meta.slot_n_ctx, defaults.n_predict, ctx_truncation);
+        }
 
         // Apply chat template to the list of messages
         return common_chat_templates_apply(chat_params.tmpls.get(), inputs);
