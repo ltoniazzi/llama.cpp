@@ -1312,9 +1312,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_CONTEXT_SHIFT"));
     add_opt(common_arg(
         {"--chat-truncate"}, "F",
-        "when the chat generation might exceed the context size, truncate by keeping the system message but dropping oldest turns until prompt fits within F*ctx_size tokens (0..1, default: disabled)",
+        "when the chat generation might exceed the context size, truncate by keeping the system message but dropping oldest turns until prompt fits within F*ctx_size tokens (0 < F < 1, default: disabled)",
         [](common_params & params, const std::string & value) {
             params.chat_truncate = std::stof(value);
+            if (params.chat_truncate <= 0.0f || params.chat_truncate >= 1.0f) {
+                throw std::invalid_argument("--chat-truncate must be in range (0, 1)");
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(

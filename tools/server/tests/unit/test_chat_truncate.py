@@ -267,3 +267,93 @@ def test_chat_truncate_n_predict_threshold_vs_max_tokens():
         f"Expected no truncation (prompt preserved at {found_n_tokens}), "
         f"got {res_max5.body['usage']['prompt_tokens']}"
     )
+
+
+def test_chat_truncate_target_capped_to_budget():
+    """
+    When chat_truncate * n_ctx > n_ctx - n_predict (the generation budget),
+    chat_truncate_target_tokens caps the truncation target at the budget.
+
+    With chat_truncate=0.9, max_tokens=64 in the request (n_predict=64):
+      fraction_target = floor(1 * 256) = 256
+      budget          = 256 - 64         = 192
+      actual_target   = min(230, 192)    = 192  ← capped
+
+    The prompt after truncation must be < 192 (the budget cap), which is
+    stricter than the uncapped fraction target of 230.
+    """
+    global server
+    
+    n_predict_req = 128
+    server.chat_truncate = 0.99
+    server.n_predict = n_predict_req
+    server.start()
+
+    assert server.n_ctx is not None and server.n_slots is not None
+    per_slot_ctx    = server.n_ctx // server.n_slots           # 256
+    fraction_target = int(server.chat_truncate * per_slot_ctx) # 255  → exceeds budget
+    budget          = per_slot_ctx - n_predict_req             # 128
+
+    assert fraction_target > budget, "precondition: fraction target must exceed budget"
+
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": n_predict_req,
+        "messages": _get_messages(),
+    })
+    assert res.status_code == 200
+    # Prompt must be below the budget-capped target (128), not just the
+    # fraction-only target (255), proving the cap was applied.
+    assert res.body["usage"]["prompt_tokens"] < budget, (
+        f"Expected prompt < budget={budget} (cap applied), "
+        f"got {res.body['usage']['prompt_tokens']} (fraction target was {fraction_target})"
+    )
+
+
+def test_chat_truncate_very_low_fraction_preserves_last_user_msg():
+    """
+    With a very small chat_truncate fraction, the truncation threshold is 
+    ctx * chat_truncate (no budget subtraction).
+
+    With chat_truncate=0.2, n_predict=-1:
+      threshold = target = floor(0.2 * 256) = 51
+
+    The truncation loop drops oldest turns until prompt < 51 tokens, leaving
+    [system + FINAL_USER] (≈ 30-35 tokens) intact — so FINAL_USER is preserved.
+    """
+    global server
+    server.chat_truncate = 0.001   # 0 tokens
+    server.n_predict = -1        # unlimited → threshold = ctx * fraction, no budget
+    server.debug = True
+    server.start()
+
+    res = server.make_request("POST", "/chat/completions", data={
+        "messages": _get_messages(),  # no max_tokens → n_predict stays -1
+    })
+    assert res.status_code == 200
+    assert "__verbose" in res.body
+    prompt = res.body["__verbose"]["prompt"]
+    templated_sys_prompt = "<s> <|im_start|>system\n" + SYSTEM + "<|im_end|>\n"
+    templated_last_message = "<|im_start|>user\n" + FINAL_USER + "<|im_end|>\n<|im_start|>assistant\n"
+    assert templated_sys_prompt + templated_last_message == prompt, "System message should the only remaining content in the prompt"
+
+
+def test_chat_truncate_negative_value_rejected():
+    """
+    --chat-truncate requires a value in (0, 1). A non-positive fraction is outside
+    the valid range and must be rejected at server startup.
+    """
+    global server
+    server.chat_truncate = 0.0
+    with pytest.raises(RuntimeError):
+        server.start()
+
+
+def test_chat_truncate_above_one_rejected():
+    """
+    --chat-truncate requires a value in (0, 1).  A value greater or equal to 1 is
+    outside the valid range and must be rejected at server startup.
+    """
+    global server
+    server.chat_truncate = 1.0
+    with pytest.raises(RuntimeError):
+        server.start()

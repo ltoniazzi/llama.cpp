@@ -2106,17 +2106,20 @@ void chat_truncate_messages(
     int32_t n_tokens = chat_n_tokens(inputs, tmpls, vocab);
 
     while (n_tokens >= target_tokens) {
-        // Find the first user message index
-        size_t first_user_msg = -1;
+        // Find the first user message index and count all user messages
+        size_t first_user_msg = (size_t)-1;
+        size_t user_count     = 0;
         for (size_t index = 0; index < inputs.messages.size(); ++index) {
             if (inputs.messages[index].role == "user") {
-                first_user_msg = index;
-                break;
+                if (first_user_msg == (size_t)-1) {
+                    first_user_msg = index;
+                }
+                user_count++;
             }
         }
 
-        // Stop if there is no user message
-        if (first_user_msg == (size_t)-1) {
+        // Stop if there are no user messages, or only the last one remains (preserve it)
+        if (user_count <= 1) {
             break;
         }
 
