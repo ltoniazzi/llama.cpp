@@ -53,7 +53,6 @@ struct cli_context {
     std::vector<raw_buffer> input_files;
     task_params defaults;
     bool verbose_prompt;
-    float chat_truncation; // fraction target for chat truncation (-1 = disabled)
 
     // thread for showing "loading" animation
     std::atomic<bool> loading_show;
@@ -70,7 +69,6 @@ struct cli_context {
         // defaults.return_progress = true; // TODO: show progress
 
         verbose_prompt   = params.verbose_prompt;
-        chat_truncation   = params.chat_truncation;
     }
 
     std::string generate_completion(result_timings & out_timings) {
