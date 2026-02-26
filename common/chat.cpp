@@ -3354,37 +3354,31 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
     return chat_templates->template_default->caps.to_map();
 }
 
+int32_t common_chat_max_prompt_tokens(int32_t n_ctx, int32_t n_predict, float fraction) {
+    const int32_t target = (int32_t)(fraction * (float)n_ctx);
+    return (n_predict > 0) ? n_ctx - n_predict : target;
+}
+
 void common_chat_truncate_messages(
     common_chat_templates_inputs & inputs,
     const common_chat_templates  * tmpls,
     const struct llama_vocab     * vocab,
-    int32_t                        n_ctx,
-    int32_t                        n_predict,
-    float                          fraction)
+    int32_t                        max_prompt_tokens)
 {
     GGML_ASSERT(tmpls  != nullptr);
     GGML_ASSERT(vocab  != nullptr);
-    GGML_ASSERT(fraction > 0.0f && fraction <= 1.0f);
 
     // Render current prompt and count tokens
     auto chat_result = common_chat_templates_apply(tmpls, inputs);
+    // TODO who expensive is to tokenise the prompt?
     auto tokens      = common_tokenize(vocab, chat_result.prompt, /* add_special */ true, /* parse_special */ true);
     int32_t n_tokens = (int32_t)tokens.size();
 
-    const int32_t target = (int32_t)(fraction * (float)n_ctx);
-
-    // Trigger: prompt would overflow the generation budget.
-    // When n_predict > 0: max prompt = n_ctx - n_predict (leave explicit room for generation).
-    // When n_predict <= 0 (unlimited): use the fraction target itself as the trigger
-    //   As there is no known generation budget to reserve, so we keep the prompt within fraction * n_ctx and
-    //   let the remaining (1 - fraction) portion serve as the generation window.
-    //   Note that this might endup retriggering truncation freqently -> move KV cache invalidation.
-    const int32_t max_prompt_tokens = (n_predict > 0) ? n_ctx - n_predict : target;
     if (n_tokens <= max_prompt_tokens) {
         return; // prompt fits, no truncation needed
     }
 
-    while (n_tokens > target) {
+    while (n_tokens > max_prompt_tokens) {
         // Find the first non-system message index
         size_t first_non_sys = 0;
         while (first_non_sys < inputs.messages.size() &&

@@ -19,6 +19,21 @@ static const char * CHATML_TMPL =
     "{% endfor %}"
     "{% if add_generation_prompt %}{{ '<|im_start|>assistant\\n' }}{% endif %}";
 
+// Strict template that raises an exception when a "tool" message is not
+// immediately preceded by an "assistant" message with at least one tool call.
+// This mirrors the validation that real model templates (e.g. Mistral Nemo)
+// perform and is used to prove that a bad message sequence produces an error.
+static const char * STRICT_TOOL_TMPL =
+    "{%- set ns = namespace(prev_has_tool_calls=false) %}"
+    "{%- for message in messages %}"
+    "{%- if message.role == 'tool' and not ns.prev_has_tool_calls %}"
+    "{{ raise_exception('Orphaned tool message: not preceded by an assistant with tool_calls') }}"
+    "{%- endif %}"
+    "{%- set ns.prev_has_tool_calls = message.tool_calls is defined and message.tool_calls | length > 0 %}"
+    "{{- '<|im_start|>' + message.role + '\\n' + message.content + '<|im_end|>\\n' }}"
+    "{%- endfor %}"
+    "{%- if add_generation_prompt %}{{ '<|im_start|>assistant\\n' }}{% endif %}";
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -54,6 +69,25 @@ static int32_t count_tokens(
     return (int32_t)common_tokenize(vocab, result.prompt, /*add_special=*/true, /*parse_special=*/true).size();
 }
 
+// Returns true if any "tool" message is not immediately preceded by an
+// "assistant" message that carries at least one tool call.  Such a message
+// is "orphaned": the assistant turn that issued the call was already removed
+// by truncation, making the conversation semantically invalid.
+static bool has_orphaned_tool_msg(const common_chat_templates_inputs & inp) {
+    for (size_t i = 0; i < inp.messages.size(); ++i) {
+        if (inp.messages[i].role != "tool") {
+            continue;
+        }
+        bool preceded_by_caller = (i > 0)
+            && (inp.messages[i - 1].role == "assistant")
+            && (!inp.messages[i - 1].tool_calls.empty());
+        if (!preceded_by_caller) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static std::string render_prompt(
         const common_chat_templates * tmpls,
         const common_chat_templates_inputs & inp) {
@@ -74,7 +108,7 @@ static void test_noop(
     size_t  n_orig = inp.messages.size();
 
     // n_ctx_slot >> toks, small n_predict → budget >> toks → no trigger
-    common_chat_truncate_messages(inp, tmpls, vocab, toks * 10, 1, 0.8f);
+    common_chat_truncate_messages(inp, tmpls, vocab, common_chat_max_prompt_tokens(toks * 10, 1, 0.8f));
 
     check(inp.messages.size() == n_orig, "message count unchanged");
 }
@@ -102,7 +136,7 @@ static void test_basic_truncation(
     float   frac  = 0.9f;
 
     std::string prompt_before = render_prompt(tmpls, inp);
-    common_chat_truncate_messages(inp, tmpls, vocab, n_ctx, n_pred, frac);
+    common_chat_truncate_messages(inp, tmpls, vocab, common_chat_max_prompt_tokens(n_ctx, n_pred, frac));
     std::string prompt_after  = render_prompt(tmpls, inp);
 
     fprintf(stderr, "  [KV-refresh] prompt before (%d chars):\n    %s\n",
@@ -145,7 +179,7 @@ static void test_n_predict_unlimited(
     {
         auto copy          = inp;
         std::string before = render_prompt(tmpls, copy);
-        common_chat_truncate_messages(copy, tmpls, vocab, n_ctx, 1, frac);
+        common_chat_truncate_messages(copy, tmpls, vocab, common_chat_max_prompt_tokens(n_ctx, 1, frac));
 
         check(copy.messages.size() == inp.messages.size(),
               "n_predict=1: no truncation (budget >> n_tokens)");
@@ -157,7 +191,7 @@ static void test_n_predict_unlimited(
     {
         auto copy          = inp;
         std::string before = render_prompt(tmpls, copy);
-        common_chat_truncate_messages(copy, tmpls, vocab, n_ctx, -1, frac);
+        common_chat_truncate_messages(copy, tmpls, vocab, common_chat_max_prompt_tokens(n_ctx, -1, frac));
 
         std::string after = render_prompt(tmpls, copy);
         fprintf(stderr, "  [KV-refresh] prompt before (%d chars):\n    %s\n",
@@ -185,11 +219,166 @@ static void test_hard_floor(
     });
 
     // Ridiculously small ctx — would drop everything if unconstrained
-    common_chat_truncate_messages(inp, tmpls, vocab, /*n_ctx=*/1, /*n_predict=*/-1, 0.5f);
+    common_chat_truncate_messages(inp, tmpls, vocab, common_chat_max_prompt_tokens(/*n_ctx=*/1, /*n_predict=*/-1, 0.5f));
 
     check(inp.messages.size() == 2,         "exactly 2 messages remain");
     check(inp.messages[0].role == "system", "first message is system");
     check(inp.messages[1].role == "user",   "second message is user");
+}
+
+// Test 0 — proves that passing a bad message sequence (orphaned tool message)
+// to a strict template raises an exception, independent of any truncation logic.
+static void test_strict_template_rejects_orphaned_tool_msg() {
+    fprintf(stdout, "Test 0: strict template raises on orphaned tool message\n");
+
+    auto strict_ptr = common_chat_templates_ptr(
+        common_chat_templates_init(/* model= */ nullptr, STRICT_TOOL_TMPL));
+    const common_chat_templates * strict = strict_ptr.get();
+
+    auto try_render = [&](common_chat_templates_inputs inp) -> bool {
+        try {
+            common_chat_templates_apply(strict, inp);
+            return false; // no exception
+        } catch (const std::exception &) {
+            return true;  // exception thrown
+        }
+    };
+
+    auto make_plain = [](const std::string & role, const std::string & content) {
+        common_chat_msg m;
+        m.role    = role;
+        m.content = content;
+        return m;
+    };
+
+    auto make_tool_caller = [](const std::string & name) {
+        common_chat_msg m;
+        m.role    = "assistant";
+        m.content = "";
+        common_chat_tool_call tc;
+        tc.name      = name;
+        tc.arguments = "{}";
+        tc.id        = "call_1";
+        m.tool_calls.push_back(tc);
+        return m;
+    };
+
+    // --- good sequence: assistant-with-tool-call immediately before tool ---
+    {
+        common_chat_templates_inputs inp;
+        inp.use_jinja             = true;
+        inp.add_generation_prompt = false;
+        inp.messages.push_back(make_plain("user",      "What is the weather?"));
+        inp.messages.push_back(make_tool_caller("get_weather"));
+        inp.messages.push_back(make_plain("tool",      R"({"temp":22})"));
+        inp.messages.push_back(make_plain("assistant", "It is 22 C."));
+
+        check(!try_render(inp),
+              "valid sequence (assistant-tc then tool) renders without error");
+    }
+
+    // --- bad sequence: tool message with no preceding assistant-with-tool-calls ---
+    {
+        common_chat_templates_inputs inp;
+        inp.use_jinja             = true;
+        inp.add_generation_prompt = false;
+        inp.messages.push_back(make_plain("tool",      R"({"temp":22})"));  // orphaned
+        inp.messages.push_back(make_plain("assistant", "It is 22 C."));
+
+        check(try_render(inp),
+              "orphaned tool message raises an error");
+    }
+}
+
+// Test 5 — demonstrates a known bug: the current truncation loop removes the
+// first (user, assistant-with-tool-calls) pair but leaves the tool-result
+// message that follows, creating an orphaned "tool" message.
+//
+// Expected (correct) behaviour: every "tool" message must be immediately
+// preceded by an "assistant" message that has tool_calls.
+//
+// This test currently FAILS because the loop only checks whether the message
+// immediately after the removed user turn is an "assistant" reply; it does
+// not know about tool-call chains and does not remove the orphaned tool turn.
+static void test_tool_call_orphan_after_truncation(
+        const common_chat_templates * tmpls,
+        const llama_vocab           * vocab) {
+    fprintf(stdout, "Test 5: truncation must not orphan tool messages (expected to fail with current code)\n");
+
+    // Build the conversation:
+    //   user0 (long)  →  assistant_tc (tool call)  →  tool_result
+    //   →  assistant_reply  →  user1 (short, must be preserved)
+    //
+    // user0 is intentionally long so that removing (user0 + assistant_tc)
+    // drops the token count below target in one iteration, causing the loop
+    // to stop with the tool_result message still at the front.
+    common_chat_templates_inputs inp;
+    inp.use_jinja             = true;
+    inp.add_generation_prompt = true;
+
+    // user0 — long enough to dominate token count
+    {
+        common_chat_msg m;
+        m.role    = "user";
+        m.content = "What is the weather forecast for the next ten days in Paris, "
+                    "including temperature highs and lows, precipitation probability, "
+                    "wind speed, humidity levels, and UV index? "
+                    "Please provide the information in a structured table format.";
+        inp.messages.push_back(m);
+    }
+    // assistant_tc — calls the weather tool (content intentionally empty)
+    {
+        common_chat_msg m;
+        m.role    = "assistant";
+        m.content = "";
+        common_chat_tool_call tc;
+        tc.name      = "get_weather";
+        tc.arguments = R"({"city": "Paris", "days": 10})";
+        tc.id        = "call_abc123";
+        m.tool_calls.push_back(tc);
+        inp.messages.push_back(m);
+    }
+    // tool_result — response from get_weather
+    {
+        common_chat_msg m;
+        m.role         = "tool";
+        m.content      = R"({"forecast": [{"day": 1, "high": 22, "low": 14}]})";
+        m.tool_call_id = "call_abc123";
+        m.tool_name    = "get_weather";
+        inp.messages.push_back(m);
+    }
+    // assistant_reply — uses the tool result
+    {
+        common_chat_msg m;
+        m.role    = "assistant";
+        m.content = "Here is the 10-day weather forecast for Paris.";
+        inp.messages.push_back(m);
+    }
+    // user1 — short follow-up that must survive truncation
+    {
+        common_chat_msg m;
+        m.role    = "user";
+        m.content = "Thanks!";
+        inp.messages.push_back(m);
+    }
+
+    int32_t toks = count_tokens(tmpls, vocab, inp);
+
+    // Trigger truncation: n_ctx = toks, n_predict = 1  →  max_prompt = toks-1
+    // so the prompt never fits and the while loop fires immediately.
+    // target = 0.9 * toks: user0 alone is well over 10 % of total tokens,
+    // so removing (user0 + assistant_tc) drops below target after one
+    // iteration, leaving tool_result orphaned at index 0.
+    common_chat_truncate_messages(inp, tmpls, vocab, common_chat_max_prompt_tokens(toks, /*n_predict=*/1, /*frac=*/0.9f));
+
+    // Print remaining sequence to make the failure easy to diagnose
+    fprintf(stderr, "  remaining messages after truncation:\n");
+    for (size_t i = 0; i < inp.messages.size(); ++i) {
+        fprintf(stderr, "    [%zu] role=%-12s tool_calls=%zu\n",
+                i, inp.messages[i].role.c_str(), inp.messages[i].tool_calls.size());
+    }
+
+    check(!has_orphaned_tool_msg(inp), "no orphaned tool messages after truncation");
 }
 
 // ---------------------------------------------------------------------------
@@ -219,10 +408,12 @@ int main(int argc, char ** argv) {
         common_chat_templates_init(/* model= */ nullptr, CHATML_TMPL));
     const common_chat_templates * tmpls = tmpls_ptr.get();
 
+    test_strict_template_rejects_orphaned_tool_msg();
     test_noop               (tmpls, vocab);
     test_basic_truncation   (tmpls, vocab);
     test_n_predict_unlimited(tmpls, vocab);
     test_hard_floor         (tmpls, vocab);
+    test_tool_call_orphan_after_truncation(tmpls, vocab);
 
     llama_model_free(model);
     llama_backend_free();

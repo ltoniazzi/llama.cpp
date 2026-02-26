@@ -50,6 +50,12 @@ static inline int32_t get_n_predict(const json & body, int32_t default_n_predict
     return json_value(body, "n_predict", json_value(body, "max_tokens", default_n_predict));
 }
 
+// TODO describe
+static inline int32_t get_n_predict_budgeted(const json & body, int32_t server_default) {
+    const int32_t n_predict = get_n_predict(body, server_default);
+    return (n_predict > 0) ? n_predict : server_default;
+}
+
 // https://community.openai.com/t/openai-chat-list-of-error-codes-and-types/357791/11
 enum error_type {
     ERROR_TYPE_INVALID_REQUEST,
@@ -305,9 +311,6 @@ struct server_chat_params {
 json oaicompat_completion_params_parse(const json & body);
 
 // used by /chat/completions endpoint
-// When opt.vocab != nullptr and opt.chat_truncation > 0, oldest non-system turn pairs are
-// dropped from the message list until the rendered prompt fits within
-// opt.chat_truncation * opt.n_ctx tokens (triggered only when prompt > n_ctx - n_predict).
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,

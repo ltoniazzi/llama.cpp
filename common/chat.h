@@ -251,14 +251,12 @@ nlohmann::ordered_json common_chat_msg_diff_to_json_oaicompat(const common_chat_
 // get template caps, useful for reporting to server /props endpoint
 std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);
 
-// Drop oldest non-system user+assistant turn pairs from inputs.messages until the rendered
-// prompt fits within `fraction * n_ctx` tokens, or only one non-system message remains.
-// Only triggered when the current prompt would overflow n_ctx - n_predict tokens.
-// The system prompt and the most-recent user message are always preserved.
+// TODO describe and move to server comm
+int32_t common_chat_max_prompt_tokens(int32_t n_ctx, int32_t n_predict, float fraction);
+
+// TODO describe and move to server comm
 void common_chat_truncate_messages(
     common_chat_templates_inputs & inputs,
     const common_chat_templates * tmpls,
     const struct llama_vocab    * vocab,
-    int32_t                       n_ctx,
-    int32_t                       n_predict,
-    float                         fraction);
+    int32_t                       max_prompt_tokens);
