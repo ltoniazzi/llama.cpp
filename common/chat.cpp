@@ -3371,14 +3371,17 @@ void common_chat_truncate_messages(
     auto tokens      = common_tokenize(vocab, chat_result.prompt, /* add_special */ true, /* parse_special */ true);
     int32_t n_tokens = (int32_t)tokens.size();
 
-    // Trigger: prompt would overflow generation budget
-    // TODO need to think if it's safe, as we might then cross context window when n_predict = -1
-    const int32_t budget = n_ctx_slot - std::max(n_predict, 0);
-    if (n_tokens <= budget) {
-        return; // no truncation needed
-    }
-
     const int32_t target = (int32_t)(fraction * (float)n_ctx_slot);
+
+    // Trigger: prompt would overflow the generation budget.
+    // When n_predict > 0: max prompt = n_ctx_slot - n_predict (leave explicit room for generation).
+    // When n_predict <= 0 (unlimited): use the fraction target itself as the trigger — there is no
+    //   known generation budget to reserve, so we keep the prompt within fraction * n_ctx_slot and
+    //   let the remaining (1 - fraction) portion serve as the generation window.
+    const int32_t max_prompt_tokens = (n_predict > 0) ? n_ctx_slot - n_predict : target;
+    if (n_tokens <= max_prompt_tokens) {
+        return; // prompt fits, no truncation needed
+    }
 
     while (n_tokens > target) {
         // Find the first non-system message index

@@ -889,7 +889,11 @@ static void handle_media(
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files)
+    std::vector<raw_buffer> & out_files,
+    const struct llama_vocab * vocab,
+    int32_t                   n_ctx_slot,
+    int32_t                   n_predict_default,
+    float                     ctx_truncation)
 {
     json llama_params;
 
@@ -1041,6 +1045,14 @@ json oaicompat_chat_params_parse(
         inputs.enable_thinking = false;
     } else if (!enable_thinking_kwarg.empty() && enable_thinking_kwarg[0] == '"') {
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
+    }
+
+    // Chat truncation: drop oldest non-system turn pairs until prompt fits in context
+    if (ctx_truncation > 0.0f && vocab != nullptr && n_ctx_slot > 0) {
+        const int32_t n_predict_req = json_value(body, "max_tokens",
+                                        json_value(body, "n_predict", n_predict_default));
+        common_chat_truncate_messages(inputs, opt.tmpls.get(), vocab,
+                                      n_ctx_slot, n_predict_req, ctx_truncation);
     }
 
     // if the assistant message appears at the end of list, we do not add end-of-turn token

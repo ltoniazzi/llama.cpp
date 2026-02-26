@@ -3578,7 +3578,11 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            ctx_server.vocab,
+            meta->slot_n_ctx,
+            params.n_predict,
+            params.ctx_truncation);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
@@ -3596,7 +3600,11 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            ctx_server.vocab,
+            meta->slot_n_ctx,
+            params.n_predict,
+            params.ctx_truncation);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
@@ -3614,7 +3622,11 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            ctx_server.vocab,
+            meta->slot_n_ctx,
+            params.n_predict,
+            params.ctx_truncation);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
