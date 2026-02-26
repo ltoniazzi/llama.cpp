@@ -3375,9 +3375,10 @@ void common_chat_truncate_messages(
 
     // Trigger: prompt would overflow the generation budget.
     // When n_predict > 0: max prompt = n_ctx_slot - n_predict (leave explicit room for generation).
-    // When n_predict <= 0 (unlimited): use the fraction target itself as the trigger — there is no
-    //   known generation budget to reserve, so we keep the prompt within fraction * n_ctx_slot and
-    //   let the remaining (1 - fraction) portion serve as the generation window.
+    // When n_predict <= 0 (unlimited): use the fraction target itself as the trigger
+    //   As there is no known generation budget to reserve, so we keep the prompt within fraction * n_ctx_slot and
+    //   let the remaining (1 - fraction) portion serve as the generation window. 
+    //   Note that this might endup retriggering truncation freqently -> move KV cache invalidation.
     const int32_t max_prompt_tokens = (n_predict > 0) ? n_ctx_slot - n_predict : target;
     if (n_tokens <= max_prompt_tokens) {
         return; // prompt fits, no truncation needed
@@ -3401,6 +3402,7 @@ void common_chat_truncate_messages(
         inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_non_sys);
 
         // If the message now at that position is an assistant reply, remove it too
+        // TODO Should consider more complete sequence, tool calls etc. How to find valid patterns to remove?
         if (first_non_sys < inputs.messages.size() &&
             inputs.messages[first_non_sys].role == "assistant") {
             inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_non_sys);
