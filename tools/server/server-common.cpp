@@ -1045,9 +1045,16 @@ json oaicompat_chat_params_parse(
 
     // Chat truncation: drop oldest non-system turn pairs until prompt fits in context
     // TODO is this a good/consistent place for the truncation to happen?
-    if (opt.chat_truncation > 0.0f) {
-        if (chat_needs_truncation(inputs, opt.tmpls.get(), opt.vocab, opt.n_ctx, get_n_predict_budgeted(body, opt.n_predict), opt.chat_truncation)) {
-            chat_truncate_messages(inputs, opt.tmpls.get(), opt.vocab, chat_target_tokens(opt.n_ctx, opt.chat_truncation));
+    if (opt.chat_truncate > 0.0f) {
+        if (
+            chat_needs_truncation(
+                chat_n_tokens(inputs, opt.tmpls.get(), opt.vocab), 
+                opt.n_ctx, 
+                get_n_predict_with_server_priority(body, opt.n_predict), 
+                opt.chat_truncate
+            )
+        ) {
+            chat_truncate_messages(inputs, opt.tmpls.get(), opt.vocab, chat_truncate_target_tokens(opt.n_ctx, opt.chat_truncate));
         }
     }
 
@@ -2052,13 +2059,12 @@ server_tokens format_prompt_rerank(
 //
 
 static int32_t compute_n_tokens_from_chat_params(const struct llama_vocab * vocab, const common_chat_params & chat_params) {
-    // TODO how expensive is it to tokenise the prompt?
     auto tokens = common_tokenize(vocab, chat_params.prompt, true, true);
     return (int32_t)tokens.size();
 }
 
-int32_t chat_target_tokens(int32_t n_ctx, float fraction) {
-    return (int32_t)(fraction * (float)n_ctx);
+int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate) {
+    return (int32_t)(chat_truncate * (float)n_ctx);
 }
 
 
@@ -2070,14 +2076,11 @@ int32_t chat_n_tokens(
     return compute_n_tokens_from_chat_params(vocab, common_chat_templates_apply(tmpls, inputs));
 }
 
+
 bool chat_needs_truncation(
-    const common_chat_templates_inputs & inputs,
-    const common_chat_templates        * tmpls,
-    const struct llama_vocab           * vocab,
-    int32_t n_ctx, int32_t n_predict, float fraction)
+    int32_t n_tokens, int32_t n_ctx, int32_t n_predict, float chat_truncate)
 {
-    const int32_t n_tokens  = chat_n_tokens(inputs, tmpls, vocab);
-    const int32_t threshold = (n_predict > 0) ? n_ctx - n_predict : chat_target_tokens(n_ctx, fraction);
+    const int32_t threshold = (n_predict > 0) ? n_ctx - n_predict : chat_truncate_target_tokens(n_ctx, chat_truncate);
     return n_tokens >= threshold;
 }
 

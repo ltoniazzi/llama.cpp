@@ -23,7 +23,7 @@ def _long_messages(n_turns: int = 15) -> list[dict]:
 
     With 15 turns the rendered prompt is well above 256 tokens, so it triggers
     both the context-exceeded error (no truncation) and the truncation logic
-    (chat_truncation enabled).
+    (chat_truncate enabled).
     """
     msgs = [{"role": "system", "content": SYSTEM}]
     for i in range(1, n_turns + 1):
@@ -55,7 +55,7 @@ def create_server():
     # tinyllama2 preset: n_ctx=512, n_slots=2, n_predict=64
     # → per-slot context = 512 // 2 = 256 tokens
     # When max_tokens=5 in a request:
-    #   get_n_predict_budgeted returns 5
+    #   get_n_predict_with_server_priority returns 5
     #   threshold = 256 - 5 = 251
     #   target    = floor(fraction * 256)
     # Using fraction ≤ 251/256 ≈ 0.98 keeps target < threshold so the
@@ -66,10 +66,10 @@ def create_server():
 
 # ── tests ─────────────────────────────────────────────────────────────────────
 
-def test_chat_truncation_overflows_without_flag():
+def test_chat_truncate_overflows_without_flag():
     """
     Baseline: a long conversation exceeds the per-slot context when
-    --chat-truncation is not set, returning a 400 exceed_context_size_error.
+    --chat-truncate is not set, returning a 400 exceed_context_size_error.
     """
     global server
     server.start()
@@ -81,13 +81,13 @@ def test_chat_truncation_overflows_without_flag():
     assert res.body["error"]["type"] == "exceed_context_size_error"
 
 
-def test_chat_truncation_prevents_overflow():
+def test_chat_truncate_prevents_overflow():
     """
-    With --chat-truncation set, the same long conversation that would otherwise
+    With --chat-truncate set, the same long conversation that would otherwise
     overflow is silently trimmed and the request succeeds.
     """
     global server
-    server.chat_truncation = 0.8
+    server.chat_truncate = 0.8
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "max_tokens": 5,
@@ -96,13 +96,13 @@ def test_chat_truncation_prevents_overflow():
     assert res.status_code == 200
 
 
-def test_chat_truncation_no_op():
+def test_chat_truncate_no_op():
     """
     A short conversation already below the truncation target is left untouched:
     every message must still appear in the rendered prompt.
     """
     global server
-    server.chat_truncation = 0.8
+    server.chat_truncate = 0.8
     server.debug = True  # enables __verbose in the response body
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
@@ -116,7 +116,7 @@ def test_chat_truncation_no_op():
     assert FINAL_USER in prompt, "Last user message should be preserved"
 
 
-def test_chat_truncation_prompt_within_budget():
+def test_chat_truncate_prompt_within_budget():
     """
     After truncation, prompt_tokens must be strictly less than the truncation
     target: floor(fraction * per_slot_ctx).
@@ -129,7 +129,7 @@ def test_chat_truncation_prompt_within_budget():
     whenever chat_needs_truncation fires.
     """
     global server
-    server.chat_truncation = 0.8
+    server.chat_truncate = 0.8
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "max_tokens": 5,
@@ -141,13 +141,13 @@ def test_chat_truncation_prompt_within_budget():
     assert res.body["usage"]["prompt_tokens"] < target
 
 
-def test_chat_truncation_system_preserved():
+def test_chat_truncate_system_preserved():
     """
     Truncation must never remove the system message; it must appear verbatim
     in the rendered prompt.
     """
     global server
-    server.chat_truncation = 0.8
+    server.chat_truncate = 0.8
     server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
@@ -159,13 +159,13 @@ def test_chat_truncation_system_preserved():
     assert SYSTEM in res.body["__verbose"]["prompt"]
 
 
-def test_chat_truncation_drops_oldest_keeps_newest():
+def test_chat_truncate_drops_oldest_keeps_newest():
     """
     Truncation removes the oldest user turn first while always keeping the
     most recent user message.
     """
     global server
-    server.chat_truncation = 0.8
+    server.chat_truncate = 0.8
     server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={

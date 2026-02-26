@@ -897,7 +897,7 @@ private:
                 /* media_path            */ params_base.media_path,
                 /* n_ctx                 */ (int32_t) llama_n_ctx_seq(ctx),
                 /* n_predict             */ params_base.n_predict,
-                /* chat_truncation       */ params_base.chat_truncation,
+                /* chat_truncate       */ params_base.chat_truncate,
                 /* vocab                 */ vocab,
             };
         }
