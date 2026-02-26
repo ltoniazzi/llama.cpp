@@ -334,7 +334,7 @@ def test_chat_truncate_very_low_fraction_preserves_last_user_msg():
     prompt = res.body["__verbose"]["prompt"]
     templated_sys_prompt = "<s> <|im_start|>system\n" + SYSTEM + "<|im_end|>\n"
     templated_last_message = "<|im_start|>user\n" + FINAL_USER + "<|im_end|>\n<|im_start|>assistant\n"
-    assert templated_sys_prompt + templated_last_message == prompt, "System message should the only remaining content in the prompt"
+    assert templated_sys_prompt + templated_last_message == prompt, "System +1 user message should the only remaining content in the prompt"
 
 
 def test_chat_truncate_negative_value_rejected():
