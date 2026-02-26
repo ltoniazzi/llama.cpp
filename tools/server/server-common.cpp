@@ -2107,7 +2107,7 @@ void chat_truncate_messages(
         bool one_or_less_user_messages = true;
         for (size_t index = 0; index < inputs.messages.size(); ++index) {
             if (inputs.messages[index].role == "user") {
-                if (first_user_msg != -1) {
+                if (first_user_msg != (size_t)-1) {
                     one_or_less_user_messages = false;
                     break;
                 }
