@@ -393,7 +393,8 @@ server_tokens format_prompt_rerank(
 //
 
 // Calculate the target number of tokens to keep in the chat history as the floor of context size * the chat_truncate fraction.
-int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate);
+// If n_predict is provided and positive, ensure that target_tokens does not exceed the budget n_ctx - n_predict.
+int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate, int32_t n_predict);
 
 // Count number of tokens in the chat history, based on the provided templates and vocab.
 int32_t chat_n_tokens(

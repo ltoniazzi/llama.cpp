@@ -1044,17 +1044,22 @@ json oaicompat_chat_params_parse(
     }
 
     // Chat truncation: drop oldest non-system turn pairs until prompt fits in context
-    // TODO is this a good/consistent place for the truncation to happen?
     if (opt.chat_truncate > 0.0f) {
+        int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
         if (
             chat_needs_truncation(
                 chat_n_tokens(inputs, opt.tmpls.get(), opt.vocab), 
                 opt.n_ctx, 
-                get_n_predict_with_server_priority(body, opt.n_predict), 
+                n_predict_with_server_priority, 
                 opt.chat_truncate
             )
         ) {
-            chat_truncate_messages(inputs, opt.tmpls.get(), opt.vocab, chat_truncate_target_tokens(opt.n_ctx, opt.chat_truncate));
+            chat_truncate_messages(
+                inputs, 
+                opt.tmpls.get(), 
+                opt.vocab, 
+                chat_truncate_target_tokens(opt.n_ctx, opt.chat_truncate, n_predict_with_server_priority)
+            );
         }
     }
 
@@ -2063,8 +2068,13 @@ static int32_t compute_n_tokens_from_chat_params(const struct llama_vocab * voca
     return (int32_t)tokens.size();
 }
 
-int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate) {
-    return (int32_t)(chat_truncate * (float)n_ctx);
+int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate, int32_t n_predict = -1) {
+    int32_t target_tokens = (int32_t)(chat_truncate * (float)n_ctx);
+    int32_t budget_tokens = n_ctx - n_predict;
+    if (n_predict > 0 && target_tokens > budget_tokens) {
+        target_tokens = budget_tokens;
+    }
+    return target_tokens;
 }
 
 
