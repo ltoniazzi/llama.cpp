@@ -71,7 +71,7 @@ def test_chat_truncate_overflow_without_chat_truncate_flag():
     global server
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
-        "max_tokens": 5,
+        "max_completion_tokens": 5,
         "messages": _get_messages(),
     })
     assert res.status_code == 400
@@ -86,7 +86,7 @@ def test_chat_truncate_prevents_overflow():
     server.chat_truncate = 0.8
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
-        "max_tokens": 5,
+        "max_completion_tokens": 5,
         "messages": _get_messages(N_TURNS_OVERFLOW),
     })
     assert res.status_code == 200
@@ -101,7 +101,7 @@ def test_chat_truncate_no_op():
     server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
-        "max_tokens": 5,
+        "max_completion_tokens": 5,
         "messages": _short_messages(),
     })
     assert res.status_code == 200
@@ -120,7 +120,7 @@ def test_chat_truncate_prompt_within_budget():
     server.chat_truncate = 0.8
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
-        "max_tokens": 5,
+        "max_completion_tokens": 5,
         "messages": _get_messages(n_turns=N_TURNS_OVERFLOW),
     })
     assert res.status_code == 200
@@ -136,7 +136,7 @@ def test_chat_truncate_drops_oldest_keeps_newest():
     server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
-        "max_tokens": 5,
+        "max_completion_tokens": 5,
         "messages": _get_messages(n_turns=N_TURNS_OVERFLOW),
     })
     assert res.status_code == 200
@@ -151,7 +151,7 @@ def test_chat_truncate_non_user_newest_preserved():
     server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
-        "max_tokens": 5,
+        "max_completion_tokens": 5,
         "messages": _get_messages(n_turns=N_TURNS_OVERFLOW, include_final_user=False),
     })
     assert res.status_code == 200
@@ -160,40 +160,40 @@ def test_chat_truncate_non_user_newest_preserved():
     assert _user_msg(1) not in prompt
     assert_turns_consistency_in_prompt(prompt, include_final_user=False)
 
-def test_chat_truncate_n_predict_threshold_vs_max_tokens():
+def test_chat_truncate_n_predict_threshold_vs_max_completion_tokens():
     """
-    The truncation threshold differs depending on whether max_tokens is in the request:
+    The truncation threshold differs depending on whether max_completion_tokens is in the request:
 
-        no max_tokens  -> n_predict = server.n_predict = 64  -> threshold = 256 - 64  = 192
-        max_tokens=5   -> n_predict = 5                      -> threshold = 256 - 5   = 251
+        no max_completion_tokens  -> n_predict = server.n_predict = 64  -> threshold = 256 - 64  = 192
+        max_completion_tokens=5   -> n_predict = 5                      -> threshold = 256 - 5   = 251
 
     We first probe to find n_turns so that the true token count T satisfies:
 
         target (192) < T < threshold_with_max5 (251)
 
     Then, with T turns:
-    - Without max_tokens: threshold=192 < T -> truncation fires, prompt < target
-    - With max_tokens=5:  threshold=251 > T -> truncation silent, prompt unchanged
+    - Without max_completion_tokens: threshold=192 < T -> truncation fires, prompt < target
+    - With max_completion_tokens=5:  threshold=251 > T -> truncation silent, prompt unchanged
     """
     global server
     server.chat_truncate = 0.8
     server.start()
 
     assert server.n_ctx is not None and server.n_slots is not None and server.n_predict is not None
-    max_tokens = 5
+    max_completion_tokens = 5
     per_slot_ctx = server.n_ctx // server.n_slots
-    threshold_no_max_tokens = per_slot_ctx - server.n_predict
-    threshold_with_max5 = per_slot_ctx - max_tokens
+    threshold_no_max_completion_tokens = per_slot_ctx - server.n_predict
+    threshold_with_max5 = per_slot_ctx - max_completion_tokens
     target = int(server.chat_truncate * per_slot_ctx)
 
-    assert threshold_no_max_tokens < target < threshold_with_max5
+    assert threshold_no_max_completion_tokens < target < threshold_with_max5
 
     # Find n_turns so that target < T < threshold_with_max5
     found_n_turns  = None
     found_n_tokens = None
     for n_turns in range(0, 10):
         probe = server.make_request("POST", "/chat/completions", data={
-            "max_tokens": 5,
+            "max_completion_tokens": 5,
             "messages": _get_messages(n_turns),
         })
         if probe.status_code != 200:
@@ -208,16 +208,16 @@ def test_chat_truncate_n_predict_threshold_vs_max_tokens():
 
     msgs = _get_messages(found_n_turns)
 
-    # Without max_tokens: threshold=192 < T, then truncation fires
+    # Without max_completion_tokens: threshold=192 < T, then truncation fires
     res_no_max = server.make_request("POST", "/chat/completions", data={
         "messages": msgs,
     })
     assert res_no_max.status_code == 200
     assert res_no_max.body["usage"]["prompt_tokens"] < target
 
-    # With max_tokens=5: threshold=251 > T, then truncation silent
+    # With max_completion_tokens=5: threshold=251 > T, then truncation silent
     res_max5 = server.make_request("POST", "/chat/completions", data={
-        "max_tokens": 5,
+        "max_completion_tokens": 5,
         "messages": msgs,
     })
     assert res_max5.status_code == 200
@@ -244,7 +244,7 @@ def test_chat_truncate_target_capped_to_budget():
     assert fraction_target > budget
 
     res = server.make_request("POST", "/chat/completions", data={
-        "max_tokens": n_predict_req,
+        "max_completion_tokens": n_predict_req,
         "messages": _get_messages(),
     })
     assert res.status_code == 200

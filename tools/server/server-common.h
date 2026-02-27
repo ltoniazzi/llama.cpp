@@ -45,9 +45,9 @@ static T json_value(const json & body, const std::string & key, const T & defaul
 }
 
 // Resolves the requested number of tokens to predict from a request body.
-// "n_predict" takes priority over "max_tokens" (OAI alias); falls back to fallback_n_predict.
+// "n_predict" takes priority over "max_completion_tokens" (OAI alias); falls back to fallback_n_predict.
 static inline int32_t get_n_predict(const json & body, int32_t fallback_n_predict) {
-    return json_value(body, "n_predict", json_value(body, "max_tokens", fallback_n_predict));
+    return json_value(body, "n_predict", json_value(body, "max_completion_tokens", fallback_n_predict));
 }
 
 // Get n_predict by prioritizing server value if body is missing or negative
