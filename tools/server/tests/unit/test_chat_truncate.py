@@ -14,7 +14,7 @@ def _asst_msg(i: int) -> str:
     return f"[A{i:02d}] Here is my explanation of topic {i}."
 
 
-def _get_messages(n_turns: int = 128) -> list[dict]:
+def _get_messages(n_turns: int = 128, include_final_user: bool = True) -> list[dict]:
     """
     Build a multi-turn conversation long enough to overflow the per-slot context
     (tinyllama2 preset: n_ctx=512, n_slots=2 → 256 tokens per slot).
@@ -23,14 +23,15 @@ def _get_messages(n_turns: int = 128) -> list[dict]:
     for i in range(1, n_turns + 1):
         msgs.append({"role": "user",      "content": _user_msg(i)})
         msgs.append({"role": "assistant", "content": _asst_msg(i)})
-    msgs.append({"role": "user", "content": FINAL_USER})
+    if include_final_user:
+        msgs.append({"role": "user", "content": FINAL_USER})
     return msgs
 
 
 def _short_messages() -> list[dict]:
     return _get_messages(n_turns=1)
 
-def assert_turns_consistency_in_prompt(prompt: str):
+def assert_turns_consistency_in_prompt(prompt: str, include_final_user: bool = True):
     """
     Verify that the user and assistant turns in the rendered prompt are consistent
     with the chat template, meaning:
@@ -41,9 +42,12 @@ def assert_turns_consistency_in_prompt(prompt: str):
     turns = prompt.split("\n")
     user_turns = [t for t in turns if t.startswith("[U")]
     asst_turns = [t for t in turns if t.startswith("[A")]
-    assert len(user_turns) == len(asst_turns) + 1, "Each assistant turn should be preceded by a user turn, and there should be one extra user turn at the end"
     assert SYSTEM in prompt, "The system message should be present in the prompt"
-    assert FINAL_USER in prompt, "The final user message should be present in the prompt"
+    if include_final_user:
+        assert len(user_turns) == len(asst_turns) + 1, "Each assistant turn should be preceded by a user turn, and there should be one extra user turn at the end"
+        assert FINAL_USER in prompt, "The final user message should be present in the prompt"
+    else:
+        assert len(user_turns) == len(asst_turns), "Each assistant turn should be preceded by a user turn, and there should be no extra user turn at the end"
     for i in range(len(asst_turns)):
         expected_asst = _asst_msg(i + 1)
         if expected_asst in prompt:
@@ -56,14 +60,14 @@ def create_server():
     global server
     server = ServerPreset.tinyllama2()
     # tinyllama2 preset: n_ctx=512, n_slots=2, n_predict=64
-    # → per-slot context = 512 // 2 = 256 tokens
+    # so per-slot context = 512 // 2 = 256 tokens
     server.jinja = True
     server.chat_template = "chatml"
 
 
 # Tests
 
-def test_overflow_without_chat_truncate_flag():
+def test_chat_truncate_overflow_without_chat_truncate_flag():
     """
     Baseline: a long conversation exceeds the per-slot context when
     --chat-truncate is not set, returning a 400 exceed_context_size_error.
@@ -142,8 +146,23 @@ def test_chat_truncate_drops_oldest_keeps_newest():
     assert res.status_code == 200
     assert "__verbose" in res.body
     prompt = res.body["__verbose"]["prompt"]
-    assert _user_msg(1) not in prompt, "Oldest user turn should be removed by truncation"
+    assert _user_msg(1) not in prompt
     assert_turns_consistency_in_prompt(prompt)
+
+def test_chat_truncate_non_user_newest_preserved():
+    global server
+    server.chat_truncate = 0.8
+    server.debug = True
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 5,
+        "messages": _get_messages(n_turns=N_TURNS_OVERFLOW, include_final_user=False),
+    })
+    assert res.status_code == 200
+    assert "__verbose" in res.body
+    prompt = res.body["__verbose"]["prompt"]
+    assert _user_msg(1) not in prompt
+    assert_turns_consistency_in_prompt(prompt, include_final_user=False)
 
 def test_chat_truncate_n_predict_threshold_vs_max_tokens():
     """

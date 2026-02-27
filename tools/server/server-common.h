@@ -300,7 +300,7 @@ struct server_chat_params {
     bool allow_audio;
     bool enable_thinking = true;
     std::string media_path;
-    int32_t n_ctx = 0;
+    int32_t n_ctx_seq;
     int32_t n_predict = -1;
     float chat_truncate = -1.0f;
     const llama_vocab * vocab = nullptr;

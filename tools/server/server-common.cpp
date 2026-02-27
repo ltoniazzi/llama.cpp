@@ -1049,12 +1049,12 @@ json oaicompat_chat_params_parse(
         if (
             chat_needs_truncation(
                 chat_n_tokens(inputs, opt.tmpls.get(), opt.vocab), 
-                opt.n_ctx, 
+                opt.n_ctx_seq, 
                 n_predict_with_server_priority, 
                 opt.chat_truncate
             )
         ) {
-            int32_t target_tokens = chat_truncate_target_tokens(opt.n_ctx, opt.chat_truncate, n_predict_with_server_priority);
+            int32_t target_tokens = chat_truncate_target_tokens(opt.n_ctx_seq, opt.chat_truncate, n_predict_with_server_priority);
             chat_truncate_messages(inputs, opt.tmpls.get(), opt.vocab, target_tokens);
         }
     }
