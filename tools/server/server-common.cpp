@@ -2068,7 +2068,6 @@ int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate, int32_t 
     return target_tokens;
 }
 
-
 int32_t chat_n_tokens(
     const common_chat_templates_inputs & inputs,
     const common_chat_templates        * tmpls,
@@ -2078,7 +2077,6 @@ int32_t chat_n_tokens(
     auto tokens = common_tokenize(vocab, chat_params.prompt, true, true);
     return (int32_t)tokens.size();
 }
-
 
 bool chat_needs_truncation(
     int32_t n_tokens, int32_t n_ctx, int32_t n_predict, float chat_truncate)
