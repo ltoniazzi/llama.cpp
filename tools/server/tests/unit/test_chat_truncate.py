@@ -15,10 +15,6 @@ def _asst_msg(i: int) -> str:
 
 
 def _get_messages(n_turns: int = 128, include_final_user: bool = True) -> list[dict]:
-    """
-    Build a multi-turn conversation long enough to overflow the per-slot context
-    (tinyllama2 preset: n_ctx=512, n_slots=2 → 256 tokens per slot).
-    """
     msgs = [{"role": "system", "content": SYSTEM}]
     for i in range(1, n_turns + 1):
         msgs.append({"role": "user",      "content": _user_msg(i)})
@@ -42,10 +38,10 @@ def assert_turns_consistency_in_prompt(prompt: str, include_final_user: bool = T
     turns = prompt.split("\n")
     user_turns = [t for t in turns if t.startswith("[U")]
     asst_turns = [t for t in turns if t.startswith("[A")]
-    assert SYSTEM in prompt, "The system message should be present in the prompt"
+    assert SYSTEM in prompt
     if include_final_user:
         assert len(user_turns) == len(asst_turns) + 1, "Each assistant turn should be preceded by a user turn, and there should be one extra user turn at the end"
-        assert FINAL_USER in prompt, "The final user message should be present in the prompt"
+        assert FINAL_USER in prompt
     else:
         assert len(user_turns) == len(asst_turns), "Each assistant turn should be preceded by a user turn, and there should be no extra user turn at the end"
     for i in range(len(asst_turns)):
@@ -102,7 +98,7 @@ def test_chat_truncate_no_op():
     """
     global server
     server.chat_truncate = 0.8
-    server.debug = True  # enables __verbose in the response body
+    server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "max_tokens": 5,
@@ -129,8 +125,8 @@ def test_chat_truncate_prompt_within_budget():
     })
     assert res.status_code == 200
     assert server.n_ctx is not None and server.n_slots is not None 
-    per_slot_ctx = server.n_ctx // server.n_slots  # 256
-    target = int(server.chat_truncate * per_slot_ctx)               # 204
+    per_slot_ctx = server.n_ctx // server.n_slots
+    target = int(server.chat_truncate * per_slot_ctx)
     assert res.body["usage"]["prompt_tokens"] < target
 
 
@@ -168,17 +164,16 @@ def test_chat_truncate_n_predict_threshold_vs_max_tokens():
     """
     The truncation threshold differs depending on whether max_tokens is in the request:
 
-        no max_tokens  → n_predict = server.n_predict = 64  → threshold = 256 - 64  = 192
-        max_tokens=5   → n_predict = 5                      → threshold = 256 - 5   = 251
+        no max_tokens  -> n_predict = server.n_predict = 64  -> threshold = 256 - 64  = 192
+        max_tokens=5   -> n_predict = 5                      -> threshold = 256 - 5   = 251
 
     We first probe to find n_turns so that the true token count T satisfies:
 
         target (192) < T < threshold_with_max5 (251)
 
-
     Then, with T turns:
-    - Without max_tokens: threshold=192 < T → truncation fires, prompt < target
-    - With max_tokens=5:  threshold=251 > T → truncation silent, prompt unchanged
+    - Without max_tokens: threshold=192 < T -> truncation fires, prompt < target
+    - With max_tokens=5:  threshold=251 > T -> truncation silent, prompt unchanged
     """
     global server
     server.chat_truncate = 0.8
@@ -213,14 +208,14 @@ def test_chat_truncate_n_predict_threshold_vs_max_tokens():
 
     msgs = _get_messages(found_n_turns)
 
-    # Without max_tokens: threshold=192 < T → truncation fires
+    # Without max_tokens: threshold=192 < T, then truncation fires
     res_no_max = server.make_request("POST", "/chat/completions", data={
         "messages": msgs,
     })
     assert res_no_max.status_code == 200
     assert res_no_max.body["usage"]["prompt_tokens"] < target
 
-    # With max_tokens=5: threshold=251 > T → truncation silent
+    # With max_tokens=5: threshold=251 > T, then truncation silent
     res_max5 = server.make_request("POST", "/chat/completions", data={
         "max_tokens": 5,
         "messages": msgs,
@@ -262,13 +257,13 @@ def test_chat_truncate_very_low_fraction_preserves_last_user_msg():
     Even with small chat_truncate fraction, truncation loop drops keeps system + 1 user prompt
     """
     global server
-    server.chat_truncate = 0.001   # 0 tokens
-    server.n_predict = -1        # unlimited → threshold = ctx * fraction, no budget
+    server.chat_truncate = 0.001
+    server.n_predict = -1
     server.debug = True
     server.start()
 
     res = server.make_request("POST", "/chat/completions", data={
-        "messages": _get_messages(),  # no max_tokens → n_predict stays -1
+        "messages": _get_messages(),
     })
     assert res.status_code == 200
     assert "__verbose" in res.body

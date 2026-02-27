@@ -2096,9 +2096,6 @@ void chat_truncate_messages(
     const struct llama_vocab     * vocab,
     int32_t                        target_tokens)
 {
-    GGML_ASSERT(tmpls  != nullptr);
-    GGML_ASSERT(vocab  != nullptr);
-
     int32_t n_tokens = chat_n_tokens(inputs, tmpls, vocab);
 
     while (n_tokens >= target_tokens) {
