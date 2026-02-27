@@ -889,6 +889,7 @@ static void handle_media(
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
+    const llama_vocab * vocab,
     std::vector<raw_buffer> & out_files)
 {
     json llama_params;
@@ -1048,14 +1049,14 @@ json oaicompat_chat_params_parse(
         int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
         if (
             chat_needs_truncation(
-                chat_n_tokens(inputs, opt.tmpls.get(), opt.vocab),
+                chat_n_tokens(inputs, opt.tmpls.get(), vocab),
                 opt.n_ctx_seq,
                 n_predict_with_server_priority,
                 opt.chat_truncate
             )
         ) {
             int32_t target_tokens = chat_truncate_target_tokens(opt.n_ctx_seq, opt.chat_truncate, n_predict_with_server_priority);
-            chat_truncate_messages(inputs, opt.tmpls.get(), opt.vocab, target_tokens);
+            chat_truncate_messages(inputs, opt.tmpls.get(), vocab, target_tokens);
         }
     }
 

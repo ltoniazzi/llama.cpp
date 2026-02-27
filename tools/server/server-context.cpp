@@ -3582,6 +3582,7 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
+            ctx_server.vocab,
             files);
         return handle_completions_impl(
             req,
@@ -3600,6 +3601,7 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
+            ctx_server.vocab,
             files);
         return handle_completions_impl(
             req,
@@ -3618,6 +3620,7 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
+            ctx_server.vocab,
             files);
         return handle_completions_impl(
             req,
@@ -3636,6 +3639,7 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
+            ctx_server.vocab,
             files);
 
         json prompt = body_parsed.at("prompt");
@@ -3652,6 +3656,7 @@ void server_routes::init_routes() {
         json data = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
+            ctx_server.vocab,
             files);
         res->ok({{ "prompt", std::move(data.at("prompt")) }});
         return res;

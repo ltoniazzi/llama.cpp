@@ -303,7 +303,6 @@ struct server_chat_params {
     int32_t n_ctx_seq;
     int32_t n_predict = -1;
     float chat_truncate = -1.0f;
-    const llama_vocab * vocab = nullptr;
 };
 
 // used by /completions endpoint
@@ -313,6 +312,7 @@ json oaicompat_completion_params_parse(const json & body);
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
+    const llama_vocab * vocab,
     std::vector<raw_buffer> & out_files);
 
 // convert OpenAI Responses API format to OpenAI Chat Completions API format
