@@ -1048,9 +1048,9 @@ json oaicompat_chat_params_parse(
         int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
         if (
             chat_needs_truncation(
-                chat_n_tokens(inputs, opt.tmpls.get(), opt.vocab), 
-                opt.n_ctx_seq, 
-                n_predict_with_server_priority, 
+                chat_n_tokens(inputs, opt.tmpls.get(), opt.vocab),
+                opt.n_ctx_seq,
+                n_predict_with_server_priority,
                 opt.chat_truncate
             )
         ) {

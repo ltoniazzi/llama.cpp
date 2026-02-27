@@ -124,7 +124,7 @@ def test_chat_truncate_prompt_within_budget():
         "messages": _get_messages(n_turns=N_TURNS_OVERFLOW),
     })
     assert res.status_code == 200
-    assert server.n_ctx is not None and server.n_slots is not None 
+    assert server.n_ctx is not None and server.n_slots is not None
     per_slot_ctx = server.n_ctx // server.n_slots
     target = int(server.chat_truncate * per_slot_ctx)
     assert res.body["usage"]["prompt_tokens"] < target
@@ -230,7 +230,7 @@ def test_chat_truncate_target_capped_to_budget():
     chat_truncate_target_tokens caps the truncation target at the budget.
     """
     global server
-    
+
     n_predict_req = 128
     server.chat_truncate = 0.99
     server.n_predict = n_predict_req

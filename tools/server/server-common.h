@@ -401,7 +401,7 @@ int32_t chat_n_tokens(
     const struct llama_vocab           * vocab);
 
 // Determine if the chat history needs truncation by checking if the number of tokens exceeds a threshold, which is either:
-// - `n_predict > 0`: `n_ctx - n_predict` 
+// - `n_predict > 0`: `n_ctx - n_predict`
 // - `n_predict <= 0`: fraction of `n_ctx` using the chat_truncate param
 bool chat_needs_truncation(
     int32_t n_tokens, int32_t n_ctx, int32_t n_predict, float fraction);
