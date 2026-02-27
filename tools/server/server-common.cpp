@@ -2059,11 +2059,6 @@ server_tokens format_prompt_rerank(
 // Chat truncation helpers
 //
 
-static int32_t compute_n_tokens_from_chat_params(const struct llama_vocab * vocab, const common_chat_params & chat_params) {
-    auto tokens = common_tokenize(vocab, chat_params.prompt, true, true);
-    return (int32_t)tokens.size();
-}
-
 int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate, int32_t n_predict = -1) {
     int32_t target_tokens = (int32_t)(chat_truncate * (float)n_ctx);
     int32_t budget_tokens = n_ctx - n_predict;
@@ -2079,7 +2074,9 @@ int32_t chat_n_tokens(
     const common_chat_templates        * tmpls,
     const struct llama_vocab           * vocab)
 {
-    return compute_n_tokens_from_chat_params(vocab, common_chat_templates_apply(tmpls, inputs));
+    common_chat_params chat_params = common_chat_templates_apply(tmpls, inputs);
+    auto tokens = common_tokenize(vocab, chat_params.prompt, true, true);
+    return (int32_t)tokens.size();
 }
 
 
@@ -2122,6 +2119,6 @@ void chat_truncate_messages(
             inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_user_msg);
         }
 
-        n_tokens = compute_n_tokens_from_chat_params(vocab, common_chat_templates_apply(tmpls, inputs));
+        n_tokens = chat_n_tokens(inputs, tmpls, vocab);
     }
 }
