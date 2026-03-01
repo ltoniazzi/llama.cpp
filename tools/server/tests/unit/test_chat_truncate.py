@@ -326,7 +326,7 @@ def test_chat_truncate_after_sleep_wake():
     })
     assert res2.status_code == 200
     prompt = res2.body["__verbose"]["prompt"]
-    assert "[U01]" in prompt, "No turn should not be dropped"
+    assert "[U01]" not in prompt, "First turn should be dropped"
 
     # Verify server woke up
     res_props = server.make_request("GET", "/props")
@@ -377,7 +377,7 @@ def _get_multimodal_messages(n_image_turns: int, final_image_id: int) -> list[di
 def test_chat_truncate_multimodal_index_mismatch():
     """
     TODO Polish sloppy test
-    
+
     Test that truncation correctly handles messages with images.
 
     KNOWN ISSUE: Media files are extracted BEFORE truncation happens.
