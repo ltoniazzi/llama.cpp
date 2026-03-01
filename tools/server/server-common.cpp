@@ -943,6 +943,7 @@ json oaicompat_chat_params_parse(
     if (!messages.is_array()) {
         throw std::invalid_argument("Expected 'messages' to be an array");
     }
+    bool has_media = false;
     for (auto & msg : messages) {
         std::string role = json_value(msg, "role", std::string());
         if (role != "assistant" && !msg.contains("content")) {
@@ -965,6 +966,7 @@ json oaicompat_chat_params_parse(
             throw std::invalid_argument("Expected 'content' to be a string or an array");
         }
 
+        bool msg_has_media = false;
         for (auto & p : content) {
             std::string type      = json_value(p, "type", std::string());
             if (type == "image_url") {
@@ -978,6 +980,7 @@ json oaicompat_chat_params_parse(
                 p["type"] = "media_marker";
                 p["text"] = mtmd_default_marker();
                 p.erase("image_url");
+                msg_has_media = true;
 
             } else if (type == "input_audio") {
                 if (!opt.allow_audio) {
@@ -999,11 +1002,13 @@ json oaicompat_chat_params_parse(
                 p["type"] = "media_marker";
                 p["text"] = mtmd_default_marker();
                 p.erase("input_audio");
+                msg_has_media = true;
 
             } else if (type != "text") {
                 throw std::invalid_argument("unsupported content[].type");
             }
         }
+        has_media |= msg_has_media;
     }
 
     common_chat_templates_inputs inputs;
@@ -1046,17 +1051,22 @@ json oaicompat_chat_params_parse(
 
     // Chat truncation: drop oldest turns until prompt fits in context
     if (opt.chat_truncate) {
-        int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
-        if (
-            chat_needs_truncation(
-                chat_n_tokens(inputs, opt.tmpls.get(), vocab),
-                opt.n_ctx_seq,
-                n_predict_with_server_priority,
-                opt.chat_truncate_max_keep
-            )
-        ) {
-            int32_t target_tokens = chat_truncate_target_tokens(opt.n_ctx_seq, opt.chat_truncate_max_keep, n_predict_with_server_priority);
-            chat_truncate_messages(inputs, opt.tmpls.get(), vocab, target_tokens);
+        if (has_media) {
+            LOG_WRN("chat truncation requested but skipped: media inputs (images/audio) are present "
+                    "and accurate token counting for media is not yet supported\n");
+        } else {
+            int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
+            if (
+                chat_needs_truncation(
+                    chat_n_tokens(inputs, opt.tmpls.get(), vocab),
+                    opt.n_ctx_seq,
+                    n_predict_with_server_priority,
+                    opt.chat_truncate_max_keep
+                )
+            ) {
+                int32_t target_tokens = chat_truncate_target_tokens(opt.n_ctx_seq, opt.chat_truncate_max_keep, n_predict_with_server_priority);
+                chat_truncate_messages(inputs, opt.tmpls.get(), vocab, target_tokens);
+            }
         }
     }
 

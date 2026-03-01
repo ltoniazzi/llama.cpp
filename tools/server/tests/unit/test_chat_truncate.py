@@ -1,15 +1,14 @@
 import pytest
 import time
-import base64
-import requests
 from utils import *
+from test_vision_api import get_img_url
 
 server: ServerProcess
 
 SYSTEM = "You are a helpful assistant."
 FINAL_USER = "[U Last]This is the most recent user message."
 N_TURNS_OVERFLOW = 128
-MAX_COMPLETION_TOKENS = 0
+MAX_COMPLETION_TOKENS = 1
 
 def _user_msg(i: int) -> str:
     return f"[U{i:02d}] Please explain topic {i} in detail."
@@ -53,6 +52,7 @@ def assert_turns_consistency_in_prompt(prompt: str, include_final_user: bool = T
         if expected_asst in prompt:
             expected_user = _user_msg(i + 1)
             assert expected_user in prompt, f"User turn {i+1} should be present in the prompt as it precedes assistant turn {i+1}"
+
 
 
 @pytest.fixture(autouse=True)
@@ -346,115 +346,26 @@ def test_chat_truncate_after_sleep_wake():
     assert res_props.body["is_sleeping"] == False
 
 
-def _get_test_image_base64(image_id: int) -> str:
-    """Fetch test image and return as base64 data URI."""
-    # Using the same test images as test_vision_api.py
-    urls = [
-        "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/11_truck.png",
-        "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/91_cat.png",
-    ]
-    url = urls[image_id % len(urls)]
-    response = requests.get(url)
-    response.raise_for_status()
-    return "data:image/png;base64," + base64.b64encode(response.content).decode("utf-8")
 
-
-def _get_multimodal_messages(n_image_turns: int, final_image_id: int) -> list[dict]:
-    """
-    Create messages where each turn has a different image.
-    Images are numbered so we can verify which ones remain after truncation.
-    """
-    msgs: list[dict] = [{"role": "system", "content": SYSTEM}]
-    for i in range(n_image_turns):
-        msgs.append({
-            "role": "user",
-            "content": [
-                {"type": "text", "text": f"[IMG{i:02d}] What is in this image?"},
-                {"type": "image_url", "image_url": {"url": _get_test_image_base64(i)}},
-            ]
-        })
-        msgs.append({"role": "assistant", "content": f"[A{i:02d}] I see something in the image."})
-    # Final turn with a specific image
-    msgs.append({
-        "role": "user",
-        "content": [
-            {"type": "text", "text": f"[IMG_FINAL] What is in this final image?"},
-            {"type": "image_url", "image_url": {"url": _get_test_image_base64(final_image_id)}},
-        ]
-    })
-    return msgs
-
-
-@pytest.mark.skip(reason="Known issue: multimodal + truncation has media index mismatch bug and token counting bug. TODO fix bugs first this.")
-def test_chat_truncate_multimodal_index_mismatch():
-    """
-    TODO Polish sloppy test
-
-    Test that truncation correctly handles messages with images.
-
-    KNOWN ISSUE: Media files are extracted BEFORE truncation happens.
-    If message 1 has image A (out_files[0]) and message 2 has image B (out_files[1]),
-    and truncation removes message 1, the out_files still has [A, B] but message 2
-    now expects its image at index 0.
-
-    This test documents the bug - it should FAIL until the bug is fixed,
-    then the skip marker can be removed.
-    """
+def test_chat_truncate_multimodal_not_triggered():
     global server
     # Use tinygemma3 for multimodal
     server = ServerPreset.tinygemma3()
     server.jinja = True
     server.debug = True
+    server.n_ctx = 256
+    server.n_slots = 1
     server.chat_truncate = True
-    server.chat_truncate_max_keep = 0.5
-    server.debug = True
+    server.chat_truncate_max_keep = 0.8
     server.start()
 
-    # Create messages with multiple images that will trigger truncation
-    # First image is a truck (index 0), second/final is a cat (index 1)
-    msgs = _get_multimodal_messages(n_image_turns=3, final_image_id=1)
-
-    res = server.make_request("POST", "/chat/completions", data={
-        "max_completion_tokens": MAX_COMPLETION_TOKENS,
-        "messages": msgs,
-    })
-
-    # If truncation removed early messages but media indices are misaligned,
-    # the model might see the wrong image for the remaining messages
-    assert res.status_code == 200
-    # TODO should verify correct images have been truncated. 
-
-# @pytest.mark.skip(reason="Known issue: token counting ignores image token cost")
-def test_chat_truncate_multimodal_token_counting():
-    """
-    TODO Polish sloppy test
-    Test that truncation correctly accounts for image tokens.
-
-    KNOWN ISSUE: chat_n_tokens() only counts text tokens, not image tokens.
-    Images can consume hundreds of tokens but the marker is just a few characters.
-    This means truncation decisions are incorrect for multimodal chats.
-
-    This test documents the bug - it should FAIL until the bug is fixed,
-    then the skip marker can be removed.
-    """
-    global server
-    # Use tinygemma3 for multimodal
-    server = ServerPreset.tinygemma3()
-    server.jinja = True
-    server.n_ctx = 512  # Small context
-    server.n_slots = 1  # Single slot = 512 tokens
-    server.chat_truncate = True
-    server.chat_truncate_max_keep = 0.8  # Target = 409 tokens
-    server.start()
-
-    # Create a message with an image - the text is short but image uses many tokens
-    msgs = [
-        {"role": "system", "content": "You are helpful."},
+    msgs = _get_messages(n_turns=1, include_final_user=False)
+    msgs += [
         {
             "role": "user",
             "content": [
                 {"type": "text", "text": "Hi"},
-                {"type": "image_url", "image_url": {"url": _get_test_image_base64(0)}},
+                {"type": "image_url", "image_url": {"url": get_img_url("IMG_BASE64_URI_0")}},
             ]
         },
     ]
@@ -464,18 +375,6 @@ def test_chat_truncate_multimodal_token_counting():
         "messages": msgs,
     })
 
-    # With proper image token counting, this might exceed context and need truncation
-    # or return an error. Currently it might succeed but use more tokens than expected,
-    # potentially causing issues downstream.
-
-    if res.status_code == 200:
-        # Check if prompt_tokens reflects actual token usage including image
-        # This assertion documents the expected behavior once fixed
-        prompt_tokens = res.body["usage"]["prompt_tokens"]
-        # Image tokens should be significantly more than just text tokens
-        # A typical image might use 256+ tokens
-        # If prompt_tokens is very low (< 50), token counting is likely wrong
-        assert prompt_tokens > 100, (
-            f"prompt_tokens={prompt_tokens} seems too low for a message with an image. "
-            "Image token cost may not be accounted for in truncation."
-        )
+    # Truncation not triggered if an media is present
+    assert res.status_code == 400
+    assert res.body["error"]["type"] == "exceed_context_size_error"
