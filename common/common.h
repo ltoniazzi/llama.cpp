@@ -523,7 +523,8 @@ struct common_params {
     bool    cache_prompt      = true;         // whether to enable prompt caching
     int32_t n_ctx_checkpoints = 8;            // max number of context checkpoints per slot
     int32_t cache_ram_mib     = 8192;         // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
-    float chat_truncate       = -1.0f;        // fraction of n_ctx_seq to target with chat truncation (-1 = disabled)
+    bool  chat_truncate          = false;     // whether to enable chat truncation
+    float chat_truncate_max_keep = 0.5f;      // fraction of n_ctx_seq to keep after truncation
 
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";                                                                         // NOLINT

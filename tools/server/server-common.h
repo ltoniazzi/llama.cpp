@@ -302,7 +302,8 @@ struct server_chat_params {
     std::string media_path;
     int32_t n_ctx_seq;
     int32_t n_predict = -1;
-    float chat_truncate = -1.0f;
+    bool  chat_truncate          = false;
+    float chat_truncate_max_keep = 0.5f;
 };
 
 // used by /completions endpoint
@@ -390,9 +391,9 @@ server_tokens format_prompt_rerank(
 // Chat truncation utils
 //
 
-// Calculate the target number of tokens to keep in the chat history as the floor of context size * the chat_truncate fraction.
+// Calculate the target number of tokens to keep in the chat history as the floor of context size * the chat_truncate_max_keep fraction.
 // If n_predict is provided and positive, ensure that target_tokens does not exceed the budget n_ctx - n_predict.
-int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate, int32_t n_predict);
+int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate_max_keep, int32_t n_predict);
 
 // Count number of tokens in the chat history, based on the provided templates and vocab.
 int32_t chat_n_tokens(
@@ -402,9 +403,9 @@ int32_t chat_n_tokens(
 
 // Determine if the chat history needs truncation by checking if the number of tokens exceeds a threshold, which is either:
 // - `n_predict > 0`: `n_ctx - n_predict`
-// - `n_predict <= 0`: fraction of `n_ctx` using the chat_truncate param
+// - `n_predict <= 0`: fraction of `n_ctx` using the chat_truncate_max_keep param
 bool chat_needs_truncation(
-    int32_t n_tokens, int32_t n_ctx, int32_t n_predict, float fraction);
+    int32_t n_tokens, int32_t n_ctx, int32_t n_predict, float chat_truncate_max_keep);
 
 // Remove oldest "turns" from the chat history until the number of tokens is within the target_tokens limit
 // Each "turn" is a sequence of messages starting with `user` and ending just before the next `user` message.

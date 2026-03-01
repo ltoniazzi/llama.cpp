@@ -86,7 +86,8 @@ def test_chat_truncate_prevents_overflow():
     With --chat-truncate set, long conversation succeeds.
     """
     global server
-    server.chat_truncate = 0.8
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.8
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "max_completion_tokens": 5,
@@ -100,7 +101,8 @@ def test_chat_truncate_no_op():
     A short conversation already below the truncation target is left untouched
     """
     global server
-    server.chat_truncate = 0.8
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.8
     server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
@@ -120,7 +122,8 @@ def test_chat_truncate_prompt_within_budget():
     target: floor(fraction * per_slot_ctx).
     """
     global server
-    server.chat_truncate = 0.8
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.8
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
         "max_completion_tokens": 5,
@@ -129,13 +132,14 @@ def test_chat_truncate_prompt_within_budget():
     assert res.status_code == 200
     assert server.n_ctx is not None and server.n_slots is not None
     per_slot_ctx = server.n_ctx // server.n_slots
-    target = int(server.chat_truncate * per_slot_ctx)
+    target = int(server.chat_truncate_max_keep * per_slot_ctx)
     assert res.body["usage"]["prompt_tokens"] < target
 
 
 def test_chat_truncate_drops_oldest_keeps_newest():
     global server
-    server.chat_truncate = 0.8
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.8
     server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
@@ -150,7 +154,8 @@ def test_chat_truncate_drops_oldest_keeps_newest():
 
 def test_chat_truncate_non_user_newest_preserved():
     global server
-    server.chat_truncate = 0.8
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.8
     server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
@@ -179,7 +184,8 @@ def test_chat_truncate_n_predict_threshold_vs_max_completion_tokens():
     - With max_completion_tokens=5:  threshold=251 > T -> truncation silent, prompt unchanged
     """
     global server
-    server.chat_truncate = 0.8
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.8
     server.start()
 
     assert server.n_ctx is not None and server.n_slots is not None and server.n_predict is not None
@@ -187,7 +193,7 @@ def test_chat_truncate_n_predict_threshold_vs_max_completion_tokens():
     per_slot_ctx = server.n_ctx // server.n_slots
     threshold_no_max_completion_tokens = per_slot_ctx - server.n_predict
     threshold_with_max5 = per_slot_ctx - max_completion_tokens
-    target = int(server.chat_truncate * per_slot_ctx)
+    target = int(server.chat_truncate_max_keep * per_slot_ctx)
 
     assert threshold_no_max_completion_tokens < target < threshold_with_max5
 
@@ -235,13 +241,14 @@ def test_chat_truncate_target_capped_to_budget():
     global server
 
     n_predict_req = 128
-    server.chat_truncate = 0.99
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.99
     server.n_predict = n_predict_req
     server.start()
 
     assert server.n_ctx is not None and server.n_slots is not None
     per_slot_ctx    = server.n_ctx // server.n_slots
-    fraction_target = int(server.chat_truncate * per_slot_ctx)
+    fraction_target = int(server.chat_truncate_max_keep * per_slot_ctx)
     budget          = per_slot_ctx - n_predict_req
 
     assert fraction_target > budget
@@ -260,7 +267,8 @@ def test_chat_truncate_very_low_fraction_preserves_last_user_msg():
     Even with small chat_truncate fraction, truncation loop drops keeps system + 1 user prompt
     """
     global server
-    server.chat_truncate = 0.001
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.001
     server.n_predict = -1
     server.debug = True
     server.start()
@@ -276,30 +284,33 @@ def test_chat_truncate_very_low_fraction_preserves_last_user_msg():
     assert templated_sys_prompt + templated_last_message == prompt
 
 
-def test_chat_truncate_negative_value_rejected():
+def test_chat_truncate_max_keep_zero_rejected():
     global server
-    server.chat_truncate = 0.0
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.0
     with pytest.raises(RuntimeError):
         server.start()
 
 
-def test_chat_truncate_above_one_rejected():
+def test_chat_truncate_max_keep_one_rejected():
     global server
-    server.chat_truncate = 1.0
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 1.0
     with pytest.raises(RuntimeError):
         server.start()
 
 
 def test_chat_truncate_after_sleep_wake():
     """
-    TODO This test can pass both cases (use vocab refreshed or stale from chat_params), 
+    TODO This test can pass both cases (use vocab refreshed or stale from chat_params),
     TODO as after sleeping the vocab pointer can be the same.
 
     This validates that the vocab pointer (used for token counting in truncation)
     is correctly refreshed when the server wakes up, and not stale from before sleep.
     """
     global server
-    server.chat_truncate = 0.8
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.8
     server.sleep_idle_seconds = 5
     server.debug = True
     server.start()
@@ -392,7 +403,8 @@ def test_chat_truncate_multimodal_index_mismatch():
     # Use tinygemma3 for multimodal
     server = ServerPreset.tinygemma3()
     server.jinja = True
-    server.chat_truncate = 0.5  # Aggressive truncation to force dropping messages
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.5
     server.debug = True
     server.start()
 
@@ -435,7 +447,8 @@ def test_chat_truncate_multimodal_token_counting():
     server.jinja = True
     server.n_ctx = 512  # Small context
     server.n_slots = 1  # Single slot = 512 tokens
-    server.chat_truncate = 0.8  # Target = 409 tokens
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.8  # Target = 409 tokens
     server.start()
 
     # Create a message with an image - the text is short but image uses many tokens

@@ -1045,17 +1045,17 @@ json oaicompat_chat_params_parse(
     }
 
     // Chat truncation: drop oldest turns until prompt fits in context
-    if (opt.chat_truncate > 0.0f) {
+    if (opt.chat_truncate) {
         int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
         if (
             chat_needs_truncation(
                 chat_n_tokens(inputs, opt.tmpls.get(), vocab),
                 opt.n_ctx_seq,
                 n_predict_with_server_priority,
-                opt.chat_truncate
+                opt.chat_truncate_max_keep
             )
         ) {
-            int32_t target_tokens = chat_truncate_target_tokens(opt.n_ctx_seq, opt.chat_truncate, n_predict_with_server_priority);
+            int32_t target_tokens = chat_truncate_target_tokens(opt.n_ctx_seq, opt.chat_truncate_max_keep, n_predict_with_server_priority);
             chat_truncate_messages(inputs, opt.tmpls.get(), vocab, target_tokens);
         }
     }
@@ -2060,8 +2060,8 @@ server_tokens format_prompt_rerank(
 // Chat truncation helpers
 //
 
-int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate, int32_t n_predict = -1) {
-    int32_t target_tokens = (int32_t)(chat_truncate * (float)n_ctx);
+int32_t chat_truncate_target_tokens(int32_t n_ctx, float chat_truncate_max_keep, int32_t n_predict = -1) {
+    int32_t target_tokens = (int32_t)(chat_truncate_max_keep * (float)n_ctx);
     int32_t budget_tokens = n_ctx - n_predict;
     if (n_predict > 0 && target_tokens > budget_tokens) {
         target_tokens = budget_tokens;
@@ -2080,9 +2080,9 @@ int32_t chat_n_tokens(
 }
 
 bool chat_needs_truncation(
-    int32_t n_tokens, int32_t n_ctx, int32_t n_predict, float chat_truncate)
+    int32_t n_tokens, int32_t n_ctx, int32_t n_predict, float chat_truncate_max_keep)
 {
-    const int32_t threshold = (n_predict > 0) ? n_ctx - n_predict : chat_truncate_target_tokens(n_ctx, chat_truncate);
+    const int32_t threshold = (n_predict > 0) ? n_ctx - n_predict : chat_truncate_target_tokens(n_ctx, chat_truncate_max_keep);
     return n_tokens >= threshold;
 }
 
