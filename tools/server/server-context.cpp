@@ -895,7 +895,7 @@ private:
                 /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
                 /* enable_thinking       */ enable_thinking,
                 /* media_path            */ params_base.media_path,
-                /* n_ctx_seq             */ (int32_t) llama_n_ctx_seq(ctx),
+                /* n_ctx_seq             */ (int32_t) llama_n_ctx_seq(ctx),  /* TODO should be safe to keep in chat_params? int32_t Should not change after exit sleep. Add to params_base?*/
                 /* n_predict             */ params_base.n_predict,
                 /* chat_truncate         */ params_base.chat_truncate,
             };
