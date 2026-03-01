@@ -290,13 +290,10 @@ def test_chat_truncate_above_one_rejected():
         server.start()
 
 
-# =============================================================================
-# Auto-sleep + Chat Truncation Tests
-# =============================================================================
-
 def test_chat_truncate_after_sleep_wake():
     """
-    Test that chat truncation works correctly after the server wakes from sleep.
+    TODO This test can pass both cases (use vocab refreshed or stale from chat_params), 
+    TODO as after sleeping the vocab pointer can be the same.
 
     This validates that the vocab pointer (used for token counting in truncation)
     is correctly refreshed when the server wakes up, and not stale from before sleep.
@@ -304,6 +301,7 @@ def test_chat_truncate_after_sleep_wake():
     global server
     server.chat_truncate = 0.8
     server.sleep_idle_seconds = 5
+    server.debug = True
     server.start()
 
     # First request before sleep - should work
@@ -327,17 +325,14 @@ def test_chat_truncate_after_sleep_wake():
         "messages": _get_messages(N_TURNS_OVERFLOW),
     })
     assert res2.status_code == 200
+    prompt = res2.body["__verbose"]["prompt"]
+    assert "[U01]" in prompt, "No turn should not be dropped"
 
     # Verify server woke up
     res_props = server.make_request("GET", "/props")
     assert res_props.status_code == 200
     assert res_props.body["is_sleeping"] == False
 
-
-# =============================================================================
-# Multimodal + Chat Truncation Tests
-# These tests use tinygemma3 (multimodal model) to test image handling
-# =============================================================================
 
 def _get_test_image_base64(image_id: int) -> str:
     """Fetch test image and return as base64 data URI."""
@@ -381,6 +376,8 @@ def _get_multimodal_messages(n_image_turns: int, final_image_id: int) -> list[di
 # @pytest.mark.skip(reason="Known issue: multimodal + truncation has media index mismatch bug")
 def test_chat_truncate_multimodal_index_mismatch():
     """
+    TODO Polish sloppy test
+    
     Test that truncation correctly handles messages with images.
 
     KNOWN ISSUE: Media files are extracted BEFORE truncation happens.
@@ -422,6 +419,7 @@ def test_chat_truncate_multimodal_index_mismatch():
 # @pytest.mark.skip(reason="Known issue: token counting ignores image token cost")
 def test_chat_truncate_multimodal_token_counting():
     """
+    TODO Polish sloppy test
     Test that truncation correctly accounts for image tokens.
 
     KNOWN ISSUE: chat_n_tokens() only counts text tokens, not image tokens.
