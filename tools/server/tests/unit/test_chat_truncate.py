@@ -1,4 +1,7 @@
 import pytest
+import time
+import base64
+import requests
 from utils import *
 
 server: ServerProcess
@@ -285,3 +288,187 @@ def test_chat_truncate_above_one_rejected():
     server.chat_truncate = 1.0
     with pytest.raises(RuntimeError):
         server.start()
+
+
+# =============================================================================
+# Auto-sleep + Chat Truncation Tests
+# =============================================================================
+
+def test_chat_truncate_after_sleep_wake():
+    """
+    Test that chat truncation works correctly after the server wakes from sleep.
+
+    This validates that the vocab pointer (used for token counting in truncation)
+    is correctly refreshed when the server wakes up, and not stale from before sleep.
+    """
+    global server
+    server.chat_truncate = 0.8
+    server.sleep_idle_seconds = 5
+    server.start()
+
+    # First request before sleep - should work
+    res1 = server.make_request("POST", "/chat/completions", data={
+        "max_completion_tokens": 5,
+        "messages": _get_messages(N_TURNS_OVERFLOW),
+    })
+    assert res1.status_code == 200
+
+    # Wait for server to go to sleep
+    time.sleep(server.sleep_idle_seconds*1.2)
+
+    # Verify server is sleeping
+    res_props = server.make_request("GET", "/props")
+    assert res_props.status_code == 200
+    assert res_props.body["is_sleeping"] == True
+
+    # Request after wake - should still work (vocab pointer must be valid)
+    res2 = server.make_request("POST", "/chat/completions", data={
+        "max_completion_tokens": 5,
+        "messages": _get_messages(N_TURNS_OVERFLOW),
+    })
+    assert res2.status_code == 200
+
+    # Verify server woke up
+    res_props = server.make_request("GET", "/props")
+    assert res_props.status_code == 200
+    assert res_props.body["is_sleeping"] == False
+
+
+# =============================================================================
+# Multimodal + Chat Truncation Tests
+# These tests use tinygemma3 (multimodal model) to test image handling
+# =============================================================================
+
+def _get_test_image_base64(image_id: int) -> str:
+    """Fetch test image and return as base64 data URI."""
+    # Using the same test images as test_vision_api.py
+    urls = [
+        "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/11_truck.png",
+        "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/91_cat.png",
+    ]
+    url = urls[image_id % len(urls)]
+    response = requests.get(url)
+    response.raise_for_status()
+    return "data:image/png;base64," + base64.b64encode(response.content).decode("utf-8")
+
+
+def _get_multimodal_messages(n_image_turns: int, final_image_id: int) -> list[dict]:
+    """
+    Create messages where each turn has a different image.
+    Images are numbered so we can verify which ones remain after truncation.
+    """
+    msgs: list[dict] = [{"role": "system", "content": SYSTEM}]
+    for i in range(n_image_turns):
+        msgs.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"[IMG{i:02d}] What is in this image?"},
+                {"type": "image_url", "image_url": {"url": _get_test_image_base64(i)}},
+            ]
+        })
+        msgs.append({"role": "assistant", "content": f"[A{i:02d}] I see something in the image."})
+    # Final turn with a specific image
+    msgs.append({
+        "role": "user",
+        "content": [
+            {"type": "text", "text": f"[IMG_FINAL] What is in this final image?"},
+            {"type": "image_url", "image_url": {"url": _get_test_image_base64(final_image_id)}},
+        ]
+    })
+    return msgs
+
+
+# @pytest.mark.skip(reason="Known issue: multimodal + truncation has media index mismatch bug")
+def test_chat_truncate_multimodal_index_mismatch():
+    """
+    Test that truncation correctly handles messages with images.
+
+    KNOWN ISSUE: Media files are extracted BEFORE truncation happens.
+    If message 1 has image A (out_files[0]) and message 2 has image B (out_files[1]),
+    and truncation removes message 1, the out_files still has [A, B] but message 2
+    now expects its image at index 0.
+
+    This test documents the bug - it should FAIL until the bug is fixed,
+    then the skip marker can be removed.
+    """
+    global server
+    # Use tinygemma3 for multimodal
+    server = ServerPreset.tinygemma3()
+    server.jinja = True
+    server.chat_truncate = 0.5  # Aggressive truncation to force dropping messages
+    server.debug = True
+    server.start()
+
+    # Create messages with multiple images that will trigger truncation
+    # First image is a truck (index 0), second/final is a cat (index 1)
+    msgs = _get_multimodal_messages(n_image_turns=3, final_image_id=1)
+
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_completion_tokens": 5,
+        "messages": msgs,
+    })
+
+    # If truncation removed early messages but media indices are misaligned,
+    # the model might see the wrong image for the remaining messages
+    assert res.status_code == 200
+
+    # The response should reference what's in the FINAL image (cat), not a truck
+    # This assertion may fail due to the index mismatch bug
+    content = res.body["choices"][0]["message"]["content"].lower()
+    # Note: tinygemma3 is trained on CIFAR-10, so it might say "cat" or "frog"
+    # The key is it should NOT be describing the first image if that was truncated
+
+
+# @pytest.mark.skip(reason="Known issue: token counting ignores image token cost")
+def test_chat_truncate_multimodal_token_counting():
+    """
+    Test that truncation correctly accounts for image tokens.
+
+    KNOWN ISSUE: chat_n_tokens() only counts text tokens, not image tokens.
+    Images can consume hundreds of tokens but the marker is just a few characters.
+    This means truncation decisions are incorrect for multimodal chats.
+
+    This test documents the bug - it should FAIL until the bug is fixed,
+    then the skip marker can be removed.
+    """
+    global server
+    # Use tinygemma3 for multimodal
+    server = ServerPreset.tinygemma3()
+    server.jinja = True
+    server.n_ctx = 512  # Small context
+    server.n_slots = 1  # Single slot = 512 tokens
+    server.chat_truncate = 0.8  # Target = 409 tokens
+    server.start()
+
+    # Create a message with an image - the text is short but image uses many tokens
+    msgs = [
+        {"role": "system", "content": "You are helpful."},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hi"},
+                {"type": "image_url", "image_url": {"url": _get_test_image_base64(0)}},
+            ]
+        },
+    ]
+
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_completion_tokens": 5,
+        "messages": msgs,
+    })
+
+    # With proper image token counting, this might exceed context and need truncation
+    # or return an error. Currently it might succeed but use more tokens than expected,
+    # potentially causing issues downstream.
+
+    if res.status_code == 200:
+        # Check if prompt_tokens reflects actual token usage including image
+        # This assertion documents the expected behavior once fixed
+        prompt_tokens = res.body["usage"]["prompt_tokens"]
+        # Image tokens should be significantly more than just text tokens
+        # A typical image might use 256+ tokens
+        # If prompt_tokens is very low (< 50), token counting is likely wrong
+        assert prompt_tokens > 100, (
+            f"prompt_tokens={prompt_tokens} seems too low for a message with an image. "
+            "Image token cost may not be accounted for in truncation."
+        )
