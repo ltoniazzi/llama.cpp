@@ -182,6 +182,10 @@ public:
     // the next position after n_tokens. if n_tokens < 0, return the next position after all tokens.
     llama_pos pos_next(int64_t n_tokens = -1) const;
 
+    // returns the n_pos for each media chunk, in order of appearance.
+    // one entry per image/audio in the token sequence.
+    std::vector<llama_pos> media_pos_costs() const;
+
     // number of tokens with position <= max_pos
     size_t size_up_to_pos(llama_pos max_pos) const;
 
@@ -420,9 +424,11 @@ void chat_truncate_messages(
 
 // Exact-count variant for multimodal requests.
 // Uses n_pos (not n_tokens) for correct M-RoPE accounting, and keeps out_files in sync.
+// Images are decoded and processed exactly once; subsequent iterations use cached n_pos values.
 void chat_truncate_messages_with_media(
     common_chat_templates_inputs & inputs,
     const common_chat_templates  * tmpls,
+    const struct llama_vocab     * vocab,
     mtmd_context                 * mctx,
     std::vector<raw_buffer>      & out_files,
     int32_t                        target_pos);

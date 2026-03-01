@@ -359,22 +359,69 @@ def test_chat_truncate_multimodal_not_triggered():
     server.chat_truncate_max_keep = 0.8
     server.start()
 
-    msgs = _get_messages(n_turns=N_TURNS_OVERFLOW, include_final_user=False)
-    msgs += [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Hi"},
-                {"type": "image_url", "image_url": {"url": get_img_url("IMG_BASE64_URI_0")}},
-            ]
-        },
-    ]
+    timings = []
 
-    res = server.make_request("POST", "/chat/completions", data={
-        "max_completion_tokens": MAX_COMPLETION_TOKENS,
-        "messages": msgs,
-    })
+    for n_turns in [1, 4, 10, 20, 30, 50, N_TURNS_OVERFLOW]:
 
-    # Truncation not triggered if an media is present
-    assert res.status_code == 400
+        msgs = _get_messages(n_turns=n_turns, include_final_user=False)
+        msgs += [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hi"},
+                    {"type": "image_url", "image_url": {"url": get_img_url("IMG_BASE64_URI_0")}},
+                ]
+            },
+        ]
+        t0 = time.time()
+        res = server.make_request("POST", "/chat/completions", data={
+            "max_completion_tokens": MAX_COMPLETION_TOKENS,
+            "messages": msgs,
+        })
+
+        timing_str = f"n_turns={n_turns}, status={res.status_code}, time={time.time()-t0:.2f}s"
+        timings.append(timing_str)
+        print(timing_str)
+
+        # Truncation not triggered if an media is present
+        assert res.status_code == 200
+    
+    print("Timings:")
+    for t in timings:
+        print(t)
+    assert res.body["error"]["type"] == "exceed_context_size_error"
+
+def test_chat_truncate_timings_not_multiumodal():
+    global server
+    # Use tinygemma3 for multimodal
+    server = ServerPreset.tinygemma3()
+    server.jinja = True
+    server.debug = True
+    server.n_ctx = 512
+    server.n_slots = 1
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.8
+    server.start()
+
+    timings = []
+
+    for n_turns in [1, 4, 10, 20, 30, 50, N_TURNS_OVERFLOW]:
+
+        msgs = _get_messages(n_turns=n_turns, include_final_user=False)
+        t0 = time.time()
+        res = server.make_request("POST", "/chat/completions", data={
+            "max_completion_tokens": MAX_COMPLETION_TOKENS,
+            "messages": msgs,
+        })
+
+        timing_str = f"n_turns={n_turns}, status={res.status_code}, time={time.time()-t0:.2f}s"
+        timings.append(timing_str)
+        print(timing_str)
+
+        # Truncation not triggered if an media is present
+        assert res.status_code == 200
+    
+    print("Timings:")
+    for t in timings:
+        print(t)
     assert res.body["error"]["type"] == "exceed_context_size_error"

@@ -274,6 +274,15 @@ llama_pos server_tokens::pos_next(int64_t n_tokens) const {
     return pos;
 }
 
+std::vector<llama_pos> server_tokens::media_pos_costs() const {
+    std::vector<llama_pos> costs;
+    costs.reserve(map_idx_to_media.size());
+    for (const auto & [idx, chunk] : map_idx_to_media) {
+        costs.push_back(mtmd_input_chunk_get_n_pos(chunk.get()));
+    }
+    return costs;
+}
+
 size_t server_tokens::size_up_to_pos(llama_pos max_pos) const {
     if (!has_mtmd) {
         return std::min((size_t)(max_pos + 1), tokens.size());
@@ -1055,9 +1064,9 @@ json oaicompat_chat_params_parse(
         int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
         int32_t target_pos = chat_truncate_target_tokens(opt.n_ctx_seq, opt.chat_truncate_max_keep, n_predict_with_server_priority);
         if (has_media && mctx != nullptr) {
-            // Exact path: process_mtmd_prompt gives real n_pos per chunk (M-RoPE aware)
+            // process_mtmd_prompt gives real n_pos per chunk (M-RoPE aware)
             // and out_files is kept in sync as turns are dropped.
-            chat_truncate_messages_with_media(inputs, opt.tmpls.get(), mctx, out_files, target_pos);
+            chat_truncate_messages_with_media(inputs, opt.tmpls.get(), vocab, mctx, out_files, target_pos);
         } else if (has_media) {
             LOG_WRN("chat truncation requested but skipped: media inputs present but no multimodal context available\n");
         } else {
@@ -2155,27 +2164,60 @@ void chat_truncate_messages(
 }
 
 // Exact-count variant for multimodal requests.
-// Uses process_mtmd_prompt() to compute n_pos (not n_tokens), which correctly accounts for
-// M-RoPE models where an image consumes max(nx,ny) position slots rather than nx*ny.
-// Also keeps out_files in sync with inputs.messages as turns are dropped.
+// Images are decoded and processed exactly ONCE via process_mtmd_prompt() to extract per-image
+// n_pos costs (M-RoPE aware). Subsequent iterations recount using cheap text re-tokenization
+// plus arithmetic over the cached costs — no further image decoding in the loop.
 void chat_truncate_messages_with_media(
     common_chat_templates_inputs & inputs,
     const common_chat_templates  * tmpls,
+    const struct llama_vocab     * vocab,
     mtmd_context                 * mctx,
     std::vector<raw_buffer>      & out_files,
     int32_t                        target_pos)
 {
+    // Decode bitmaps and run mtmd_tokenize once to get per-image n_pos values.
+    common_chat_params p0 = common_chat_templates_apply(tmpls, inputs);
+    server_tokens initial_st = process_mtmd_prompt(mctx, p0.prompt, out_files);
+    std::vector<llama_pos> image_costs = initial_st.media_pos_costs();
+    GGML_ASSERT(image_costs.size() == out_files.size());
+
+    llama_pos image_pos_total = 0;
+    for (auto c : image_costs) image_pos_total += c;
+
+    // marker_token_cost: tokens the template emits per image placeholder in the rendered prompt.
+    // Derivation: chat_n_tokens = text_pure + n_images * marker_cost
+    //             initial_n_pos = text_pure + image_pos_total
+    //  => marker_cost = (chat_n_tokens + image_pos_total - initial_n_pos) / n_images
+    const int32_t initial_chat_n_tokens = chat_n_tokens(inputs, tmpls, vocab);
+    const int32_t initial_n_pos         = (int32_t)initial_st.pos_next(-1);
+    const int32_t n_images_initial      = (int32_t)out_files.size();
+    const int32_t marker_token_cost     =
+        (initial_chat_n_tokens + (int32_t)image_pos_total - initial_n_pos) / n_images_initial;
+
+    // Recount without decoding: re-tokenize text (fast) + use cached image n_pos.
     auto count_pos = [&]() -> int32_t {
-        common_chat_params p = common_chat_templates_apply(tmpls, inputs);
-        return (int32_t)process_mtmd_prompt(mctx, p.prompt, out_files).pos_next(-1);
+        int32_t n = chat_n_tokens(inputs, tmpls, vocab);
+        n -= (int32_t)out_files.size() * marker_token_cost;
+        n += (int32_t)image_pos_total;
+        return n;
     };
 
-    int32_t n_pos = count_pos();
-    while (n_pos >= target_pos) {
+    // Helper: drop one turn and sync out_files / image_costs in one place.
+    auto drop_one = [&]() -> bool {
         size_t file_offset = 0, n_files_removed = 0;
-        if (!chat_drop_first_user_turn(inputs, &file_offset, &n_files_removed)) break;
+        if (!chat_drop_first_user_turn(inputs, &file_offset, &n_files_removed)) return false;
+        for (size_t i = file_offset; i < file_offset + n_files_removed; i++)
+            image_pos_total -= image_costs[i];
+        image_costs.erase(image_costs.begin() + file_offset,
+                          image_costs.begin() + file_offset + n_files_removed);
         out_files.erase(out_files.begin() + file_offset,
                         out_files.begin() + file_offset + n_files_removed);
+        return true;
+    };
+
+    int32_t n_pos = initial_n_pos;
+    while (n_pos >= target_pos) {
+        if (!drop_one()) break;
         n_pos = count_pos();
     }
 }
