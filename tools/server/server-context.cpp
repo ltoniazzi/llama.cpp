@@ -898,7 +898,6 @@ private:
                 /* n_ctx_seq             */ (int32_t) llama_n_ctx_seq(ctx),
                 /* n_predict             */ params_base.n_predict,
                 /* chat_truncate         */ params_base.chat_truncate,
-                /* vocab                 */ vocab,
             };
         }
 
