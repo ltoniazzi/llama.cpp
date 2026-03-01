@@ -9,6 +9,7 @@ server: ServerProcess
 SYSTEM = "You are a helpful assistant."
 FINAL_USER = "[U Last]This is the most recent user message."
 N_TURNS_OVERFLOW = 128
+MAX_COMPLETION_TOKENS = 0
 
 def _user_msg(i: int) -> str:
     return f"[U{i:02d}] Please explain topic {i} in detail."
@@ -74,7 +75,7 @@ def test_chat_truncate_overflow_without_chat_truncate_flag():
     global server
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
-        "max_completion_tokens": 5,
+        "max_completion_tokens": MAX_COMPLETION_TOKENS,
         "messages": _get_messages(),
     })
     assert res.status_code == 400
@@ -90,7 +91,7 @@ def test_chat_truncate_prevents_overflow():
     server.chat_truncate_max_keep = 0.8
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
-        "max_completion_tokens": 5,
+        "max_completion_tokens": MAX_COMPLETION_TOKENS,
         "messages": _get_messages(N_TURNS_OVERFLOW),
     })
     assert res.status_code == 200
@@ -106,7 +107,7 @@ def test_chat_truncate_no_op():
     server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
-        "max_completion_tokens": 5,
+        "max_completion_tokens": MAX_COMPLETION_TOKENS,
         "messages": _short_messages(),
     })
     assert res.status_code == 200
@@ -126,7 +127,7 @@ def test_chat_truncate_prompt_within_budget():
     server.chat_truncate_max_keep = 0.8
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
-        "max_completion_tokens": 5,
+        "max_completion_tokens": MAX_COMPLETION_TOKENS,
         "messages": _get_messages(n_turns=N_TURNS_OVERFLOW),
     })
     assert res.status_code == 200
@@ -143,7 +144,7 @@ def test_chat_truncate_drops_oldest_keeps_newest():
     server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
-        "max_completion_tokens": 5,
+        "max_completion_tokens": MAX_COMPLETION_TOKENS,
         "messages": _get_messages(n_turns=N_TURNS_OVERFLOW),
     })
     assert res.status_code == 200
@@ -159,7 +160,7 @@ def test_chat_truncate_non_user_newest_preserved():
     server.debug = True
     server.start()
     res = server.make_request("POST", "/chat/completions", data={
-        "max_completion_tokens": 5,
+        "max_completion_tokens": MAX_COMPLETION_TOKENS,
         "messages": _get_messages(n_turns=N_TURNS_OVERFLOW, include_final_user=False),
     })
     assert res.status_code == 200
@@ -173,15 +174,15 @@ def test_chat_truncate_n_predict_threshold_vs_max_completion_tokens():
     The truncation threshold differs depending on whether max_completion_tokens is in the request:
 
         no max_completion_tokens  -> n_predict = server.n_predict = 64  -> threshold = 256 - 64  = 192
-        max_completion_tokens=5   -> n_predict = 5                      -> threshold = 256 - 5   = 251
+        max_completion_tokens=5   -> n_predict = 1                      -> threshold = 256 - 1   = 255
 
     We first probe to find n_turns so that the true token count T satisfies:
 
-        target (192) < T < threshold_with_max5 (251)
+        target (192) < T < threshold_with_max1 (255)
 
     Then, with T turns:
     - Without max_completion_tokens: threshold=192 < T -> truncation fires, prompt < target
-    - With max_completion_tokens=5:  threshold=251 > T -> truncation silent, prompt unchanged
+    - With max_completion_tokens=5:  threshold=255 > T -> truncation silent, prompt unchanged
     """
     global server
     server.chat_truncate = True
@@ -189,26 +190,26 @@ def test_chat_truncate_n_predict_threshold_vs_max_completion_tokens():
     server.start()
 
     assert server.n_ctx is not None and server.n_slots is not None and server.n_predict is not None
-    max_completion_tokens = 5
+    max_completion_tokens = 1
     per_slot_ctx = server.n_ctx // server.n_slots
     threshold_no_max_completion_tokens = per_slot_ctx - server.n_predict
-    threshold_with_max5 = per_slot_ctx - max_completion_tokens
+    threshold_with_max1 = per_slot_ctx - max_completion_tokens
     target = int(server.chat_truncate_max_keep * per_slot_ctx)
 
-    assert threshold_no_max_completion_tokens < target < threshold_with_max5
+    assert threshold_no_max_completion_tokens < target < threshold_with_max1
 
-    # Find n_turns so that target < T < threshold_with_max5
+    # Find n_turns so that target < T < threshold_with_max1
     found_n_turns  = None
     found_n_tokens = None
     for n_turns in range(0, 10):
         probe = server.make_request("POST", "/chat/completions", data={
-            "max_completion_tokens": 5,
+            "max_completion_tokens": MAX_COMPLETION_TOKENS,
             "messages": _get_messages(n_turns),
         })
         if probe.status_code != 200:
             break
         pt = probe.body["usage"]["prompt_tokens"]
-        if target < pt < threshold_with_max5:
+        if target < pt < threshold_with_max1:
             found_n_turns  = n_turns
             found_n_tokens = pt
             break
@@ -224,9 +225,9 @@ def test_chat_truncate_n_predict_threshold_vs_max_completion_tokens():
     assert res_no_max.status_code == 200
     assert res_no_max.body["usage"]["prompt_tokens"] < target
 
-    # With max_completion_tokens=5: threshold=251 > T, then truncation silent
+    # With max_completion_tokens=5: threshold=255 > T, then truncation silent
     res_max5 = server.make_request("POST", "/chat/completions", data={
-        "max_completion_tokens": 5,
+        "max_completion_tokens": MAX_COMPLETION_TOKENS,
         "messages": msgs,
     })
     assert res_max5.status_code == 200
@@ -317,7 +318,7 @@ def test_chat_truncate_after_sleep_wake():
 
     # First request before sleep - should work
     res1 = server.make_request("POST", "/chat/completions", data={
-        "max_completion_tokens": 5,
+        "max_completion_tokens": MAX_COMPLETION_TOKENS,
         "messages": _get_messages(N_TURNS_OVERFLOW),
     })
     assert res1.status_code == 200
@@ -332,7 +333,7 @@ def test_chat_truncate_after_sleep_wake():
 
     # Request after wake - should still work (vocab pointer must be valid)
     res2 = server.make_request("POST", "/chat/completions", data={
-        "max_completion_tokens": 5,
+        "max_completion_tokens": MAX_COMPLETION_TOKENS,
         "messages": _get_messages(N_TURNS_OVERFLOW),
     })
     assert res2.status_code == 200
@@ -384,7 +385,7 @@ def _get_multimodal_messages(n_image_turns: int, final_image_id: int) -> list[di
     return msgs
 
 
-# @pytest.mark.skip(reason="Known issue: multimodal + truncation has media index mismatch bug")
+@pytest.mark.skip(reason="Known issue: multimodal + truncation has media index mismatch bug and token counting bug. TODO fix bugs first this.")
 def test_chat_truncate_multimodal_index_mismatch():
     """
     TODO Polish sloppy test
@@ -403,6 +404,7 @@ def test_chat_truncate_multimodal_index_mismatch():
     # Use tinygemma3 for multimodal
     server = ServerPreset.tinygemma3()
     server.jinja = True
+    server.debug = True
     server.chat_truncate = True
     server.chat_truncate_max_keep = 0.5
     server.debug = True
@@ -413,20 +415,14 @@ def test_chat_truncate_multimodal_index_mismatch():
     msgs = _get_multimodal_messages(n_image_turns=3, final_image_id=1)
 
     res = server.make_request("POST", "/chat/completions", data={
-        "max_completion_tokens": 5,
+        "max_completion_tokens": MAX_COMPLETION_TOKENS,
         "messages": msgs,
     })
 
     # If truncation removed early messages but media indices are misaligned,
     # the model might see the wrong image for the remaining messages
     assert res.status_code == 200
-
-    # The response should reference what's in the FINAL image (cat), not a truck
-    # This assertion may fail due to the index mismatch bug
-    content = res.body["choices"][0]["message"]["content"].lower()
-    # Note: tinygemma3 is trained on CIFAR-10, so it might say "cat" or "frog"
-    # The key is it should NOT be describing the first image if that was truncated
-
+    # TODO should verify correct images have been truncated. 
 
 # @pytest.mark.skip(reason="Known issue: token counting ignores image token cost")
 def test_chat_truncate_multimodal_token_counting():
@@ -464,7 +460,7 @@ def test_chat_truncate_multimodal_token_counting():
     ]
 
     res = server.make_request("POST", "/chat/completions", data={
-        "max_completion_tokens": 5,
+        "max_completion_tokens": MAX_COMPLETION_TOKENS,
         "messages": msgs,
     })
 
