@@ -353,13 +353,13 @@ def test_chat_truncate_multimodal_not_triggered():
     server = ServerPreset.tinygemma3()
     server.jinja = True
     server.debug = True
-    server.n_ctx = 256
+    server.n_ctx = 512
     server.n_slots = 1
     server.chat_truncate = True
     server.chat_truncate_max_keep = 0.8
     server.start()
 
-    msgs = _get_messages(n_turns=1, include_final_user=False)
+    msgs = _get_messages(n_turns=N_TURNS_OVERFLOW, include_final_user=False)
     msgs += [
         {
             "role": "user",

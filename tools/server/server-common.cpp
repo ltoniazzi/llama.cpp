@@ -890,6 +890,7 @@ json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
     const llama_vocab * vocab,
+    mtmd_context * mctx,
     std::vector<raw_buffer> & out_files)
 {
     json llama_params;
@@ -1051,21 +1052,17 @@ json oaicompat_chat_params_parse(
 
     // Chat truncation: drop oldest turns until prompt fits in context
     if (opt.chat_truncate) {
-        if (has_media) {
-            LOG_WRN("chat truncation requested but skipped: media inputs (images/audio) are present "
-                    "and accurate token counting for media is not yet supported\n");
+        int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
+        int32_t target_pos = chat_truncate_target_tokens(opt.n_ctx_seq, opt.chat_truncate_max_keep, n_predict_with_server_priority);
+        if (has_media && mctx != nullptr) {
+            // Exact path: process_mtmd_prompt gives real n_pos per chunk (M-RoPE aware)
+            // and out_files is kept in sync as turns are dropped.
+            chat_truncate_messages_with_media(inputs, opt.tmpls.get(), mctx, out_files, target_pos);
+        } else if (has_media) {
+            LOG_WRN("chat truncation requested but skipped: media inputs present but no multimodal context available\n");
         } else {
-            int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
-            if (
-                chat_needs_truncation(
-                    chat_n_tokens(inputs, opt.tmpls.get(), vocab),
-                    opt.n_ctx_seq,
-                    n_predict_with_server_priority,
-                    opt.chat_truncate_max_keep
-                )
-            ) {
-                int32_t target_tokens = chat_truncate_target_tokens(opt.n_ctx_seq, opt.chat_truncate_max_keep, n_predict_with_server_priority);
-                chat_truncate_messages(inputs, opt.tmpls.get(), vocab, target_tokens);
+            if (chat_needs_truncation(chat_n_tokens(inputs, opt.tmpls.get(), vocab), opt.n_ctx_seq, n_predict_with_server_priority, opt.chat_truncate_max_keep)) {
+                chat_truncate_messages(inputs, opt.tmpls.get(), vocab, target_pos);
             }
         }
     }
@@ -2096,6 +2093,54 @@ bool chat_needs_truncation(
     return n_tokens >= threshold;
 }
 
+// Drop the first user turn (and any immediately following non-user messages) from inputs.messages.
+// Returns false if there is only one or zero user turns left (cannot truncate further).
+// If out_file_offset / out_n_files_removed are non-null, also counts <__media__> markers so the
+// caller can keep out_files in sync: erase [out_file_offset, out_file_offset + out_n_files_removed).
+static bool chat_drop_first_user_turn(
+    common_chat_templates_inputs & inputs,
+    size_t                       * out_file_offset,
+    size_t                       * out_n_files_removed)
+{
+    size_t first_user_msg = (size_t)-1;
+    bool one_or_less = true;
+    for (size_t i = 0; i < inputs.messages.size(); ++i) {
+        if (inputs.messages[i].role == "user") {
+            if (first_user_msg != (size_t)-1) { one_or_less = false; break; }
+            first_user_msg = i;
+        }
+    }
+    if (one_or_less) return false;
+
+    auto count_markers = [](const common_chat_msg & msg) -> size_t {
+        size_t n = 0;
+        for (const auto & part : msg.content_parts) {
+            if (part.type == "media_marker") n++;
+        }
+        return n;
+    };
+
+    if (out_file_offset) {
+        *out_file_offset = 0;
+        for (size_t i = 0; i < first_user_msg; i++) {
+            *out_file_offset += count_markers(inputs.messages[i]);
+        }
+    }
+
+    if (out_n_files_removed) {
+        *out_n_files_removed = count_markers(inputs.messages[first_user_msg]);
+        for (size_t i = first_user_msg + 1; i < inputs.messages.size() && inputs.messages[i].role != "user"; i++) {
+            *out_n_files_removed += count_markers(inputs.messages[i]);
+        }
+    }
+
+    inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_user_msg);
+    while (first_user_msg < inputs.messages.size() && inputs.messages[first_user_msg].role != "user") {
+        inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_user_msg);
+    }
+    return true;
+}
+
 void chat_truncate_messages(
     common_chat_templates_inputs & inputs,
     const common_chat_templates  * tmpls,
@@ -2103,31 +2148,34 @@ void chat_truncate_messages(
     int32_t                        target_tokens)
 {
     int32_t n_tokens = chat_n_tokens(inputs, tmpls, vocab);
-
     while (n_tokens >= target_tokens) {
-        // Find the first user message index and check if there's more than 1 user message
-        size_t first_user_msg = -1;
-        bool one_or_less_user_messages = true;
-        for (size_t index = 0; index < inputs.messages.size(); ++index) {
-            if (inputs.messages[index].role == "user") {
-                if (first_user_msg != (size_t)-1) {
-                    one_or_less_user_messages = false;
-                    break;
-                }
-                first_user_msg = index;
-            }
-        }
-
-        if (one_or_less_user_messages) {
-            break;
-        }
-
-        // Remove all messages until we meet another user message
-        inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_user_msg);
-        while (inputs.messages[first_user_msg].role != "user" && first_user_msg < inputs.messages.size()) {
-            inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_user_msg);
-        }
-
+        if (!chat_drop_first_user_turn(inputs, nullptr, nullptr)) break;
         n_tokens = chat_n_tokens(inputs, tmpls, vocab);
+    }
+}
+
+// Exact-count variant for multimodal requests.
+// Uses process_mtmd_prompt() to compute n_pos (not n_tokens), which correctly accounts for
+// M-RoPE models where an image consumes max(nx,ny) position slots rather than nx*ny.
+// Also keeps out_files in sync with inputs.messages as turns are dropped.
+void chat_truncate_messages_with_media(
+    common_chat_templates_inputs & inputs,
+    const common_chat_templates  * tmpls,
+    mtmd_context                 * mctx,
+    std::vector<raw_buffer>      & out_files,
+    int32_t                        target_pos)
+{
+    auto count_pos = [&]() -> int32_t {
+        common_chat_params p = common_chat_templates_apply(tmpls, inputs);
+        return (int32_t)process_mtmd_prompt(mctx, p.prompt, out_files).pos_next(-1);
+    };
+
+    int32_t n_pos = count_pos();
+    while (n_pos >= target_pos) {
+        size_t file_offset = 0, n_files_removed = 0;
+        if (!chat_drop_first_user_turn(inputs, &file_offset, &n_files_removed)) break;
+        out_files.erase(out_files.begin() + file_offset,
+                        out_files.begin() + file_offset + n_files_removed);
+        n_pos = count_pos();
     }
 }

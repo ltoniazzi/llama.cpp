@@ -314,6 +314,7 @@ json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
     const llama_vocab * vocab,
+    mtmd_context * mctx,
     std::vector<raw_buffer> & out_files);
 
 // convert OpenAI Responses API format to OpenAI Chat Completions API format
@@ -416,3 +417,12 @@ void chat_truncate_messages(
     const common_chat_templates  * tmpls,
     const struct llama_vocab     * vocab,
     int32_t                        target_tokens);
+
+// Exact-count variant for multimodal requests.
+// Uses n_pos (not n_tokens) for correct M-RoPE accounting, and keeps out_files in sync.
+void chat_truncate_messages_with_media(
+    common_chat_templates_inputs & inputs,
+    const common_chat_templates  * tmpls,
+    mtmd_context                 * mctx,
+    std::vector<raw_buffer>      & out_files,
+    int32_t                        target_pos);

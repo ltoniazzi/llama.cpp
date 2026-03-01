@@ -3583,6 +3583,7 @@ void server_routes::init_routes() {
             body,
             meta->chat_params,
             ctx_server.vocab,
+            ctx_server.mctx,
             files);
         return handle_completions_impl(
             req,
@@ -3602,6 +3603,7 @@ void server_routes::init_routes() {
             body,
             meta->chat_params,
             ctx_server.vocab,
+            ctx_server.mctx,
             files);
         return handle_completions_impl(
             req,
@@ -3621,6 +3623,7 @@ void server_routes::init_routes() {
             body,
             meta->chat_params,
             ctx_server.vocab,
+            ctx_server.mctx,
             files);
         return handle_completions_impl(
             req,
@@ -3640,6 +3643,7 @@ void server_routes::init_routes() {
             body,
             meta->chat_params,
             ctx_server.vocab,
+            ctx_server.mctx,
             files);
 
         json prompt = body_parsed.at("prompt");
@@ -3657,6 +3661,7 @@ void server_routes::init_routes() {
             body,
             meta->chat_params,
             ctx_server.vocab,
+            ctx_server.mctx,
             files);
         res->ok({{ "prompt", std::move(data.at("prompt")) }});
         return res;
