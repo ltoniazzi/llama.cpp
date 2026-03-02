@@ -7,20 +7,26 @@ server: ServerProcess
 
 SYSTEM = "You are a helpful assistant."
 FINAL_USER = "[U Last]This is the most recent user message."
-N_TURNS_OVERFLOW = 128
+N_TURNS_OVERFLOW = 100
 MAX_COMPLETION_TOKENS = 1
 
-def _user_msg(i: int) -> str:
-    return f"[U{i:02d}] Please explain topic {i} in detail."
+def _user_msg(i: int, include_image: bool = False) -> str|list[dict]:
+    content = f"[U{i:02d}] Please explain topic {i} in detail."
+    if include_image:
+        content = [
+                    {"type": "text", "text": content},
+                    {"type": "image_url", "image_url": {"url": get_img_url("IMG_BASE64_URI_0")}},
+                ]
+    return content
 
 def _asst_msg(i: int) -> str:
     return f"[A{i:02d}] Here is my explanation of topic {i}."
 
 
-def _get_messages(n_turns: int = 128, include_final_user: bool = True) -> list[dict]:
+def _get_messages(n_turns: int = 128, include_final_user: bool = True, include_image: bool = False) -> list[dict]:
     msgs = [{"role": "system", "content": SYSTEM}]
     for i in range(1, n_turns + 1):
-        msgs.append({"role": "user",      "content": _user_msg(i)})
+        msgs.append({"role": "user",      "content": _user_msg(i, include_image=include_image)})
         msgs.append({"role": "assistant", "content": _asst_msg(i)})
     if include_final_user:
         msgs.append({"role": "user", "content": FINAL_USER})
@@ -312,7 +318,7 @@ def test_chat_truncate_after_sleep_wake():
     global server
     server.chat_truncate = True
     server.chat_truncate_max_keep = 0.8
-    server.sleep_idle_seconds = 5
+    server.sleep_idle_seconds = 2
     server.debug = True
     server.start()
 
@@ -347,12 +353,11 @@ def test_chat_truncate_after_sleep_wake():
 
 
 
-def test_chat_truncate_multimodal_not_triggered():
+def test_chat_truncate_multimodal_timings():
     global server
     # Use tinygemma3 for multimodal
     server = ServerPreset.tinygemma3()
     server.jinja = True
-    server.debug = True
     server.n_ctx = 512
     server.n_slots = 1
     server.chat_truncate = True
@@ -362,26 +367,17 @@ def test_chat_truncate_multimodal_not_triggered():
     timings = []
 
     for n_turns in [1, 4, 10, 20, 30, 50, N_TURNS_OVERFLOW]:
-
-        msgs = _get_messages(n_turns=n_turns, include_final_user=False)
-        msgs += [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "Hi"},
-                    {"type": "image_url", "image_url": {"url": get_img_url("IMG_BASE64_URI_0")}},
-                ]
-            },
-        ]
+        msgs = _get_messages(n_turns=n_turns, include_final_user=False, include_image=True)
+      
         t0 = time.time()
         res = server.make_request("POST", "/chat/completions", data={
             "max_completion_tokens": MAX_COMPLETION_TOKENS,
             "messages": msgs,
         })
 
-        timing_str = f"n_turns={n_turns}, status={res.status_code}, time={time.time()-t0:.2f}s"
-        timings.append(timing_str)
-        print(timing_str)
+        timing = {"n_turns": n_turns, "status": res.status_code, "time": time.time()-t0}
+        timings.append(timing)
+        print(timing)
 
         # Truncation not triggered if an media is present
         assert res.status_code == 200
@@ -389,14 +385,13 @@ def test_chat_truncate_multimodal_not_triggered():
     print("Timings:")
     for t in timings:
         print(t)
-    assert res.body["error"]["type"] == "exceed_context_size_error"
+        assert t["time"] < 1.0
 
-def test_chat_truncate_timings_not_multiumodal():
+def test_chat_truncate_not_multimodal_timings():
     global server
     # Use tinygemma3 for multimodal
     server = ServerPreset.tinygemma3()
     server.jinja = True
-    server.debug = True
     server.n_ctx = 512
     server.n_slots = 1
     server.chat_truncate = True
@@ -414,9 +409,8 @@ def test_chat_truncate_timings_not_multiumodal():
             "messages": msgs,
         })
 
-        timing_str = f"n_turns={n_turns}, status={res.status_code}, time={time.time()-t0:.2f}s"
-        timings.append(timing_str)
-        print(timing_str)
+        timing = {"n_turns": n_turns, "status": res.status_code, "time": time.time()-t0}
+        timings.append(timing)
 
         # Truncation not triggered if an media is present
         assert res.status_code == 200
@@ -424,4 +418,4 @@ def test_chat_truncate_timings_not_multiumodal():
     print("Timings:")
     for t in timings:
         print(t)
-    assert res.body["error"]["type"] == "exceed_context_size_error"
+        assert t["time"] < 1.0

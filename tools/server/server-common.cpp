@@ -1063,12 +1063,10 @@ json oaicompat_chat_params_parse(
     if (opt.chat_truncate) {
         int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
         int32_t target_pos = chat_truncate_target_tokens(opt.n_ctx_seq, opt.chat_truncate_max_keep, n_predict_with_server_priority);
-        if (has_media && mctx != nullptr) {
+        if (has_media) {
             // process_mtmd_prompt gives real n_pos per chunk (M-RoPE aware)
             // and out_files is kept in sync as turns are dropped.
             chat_truncate_messages_with_media(inputs, opt.tmpls.get(), vocab, mctx, out_files, target_pos);
-        } else if (has_media) {
-            LOG_WRN("chat truncation requested but skipped: media inputs present but no multimodal context available\n");
         } else {
             if (chat_needs_truncation(chat_n_tokens(inputs, opt.tmpls.get(), vocab), opt.n_ctx_seq, n_predict_with_server_priority, opt.chat_truncate_max_keep)) {
                 chat_truncate_messages(inputs, opt.tmpls.get(), vocab, target_pos);
@@ -2150,6 +2148,67 @@ static bool chat_drop_first_user_turn(
     return true;
 }
 
+// Extract the plain text of a message (concatenate text content_parts; skip media_marker).
+// TODO this needed? what about tools? does not templateing can merge a full turn sequence of messages?
+static std::string chat_msg_text(const common_chat_msg & msg) {
+    if (!msg.content.empty()) return msg.content;
+    std::string text;
+    for (const auto & p : msg.content_parts)
+        if (p.type == "text") text += p.text;
+    return text;
+}
+
+// Describes a contiguous block of messages that forms one droppable user turn.
+struct TurnSpan {
+    size_t msg_first;   // index of user message in inputs.messages
+    size_t msg_count;   // number of messages (user + following non-user messages)
+    size_t file_offset; // cumulative media-file index at start of this turn
+    size_t file_count;  // number of media files in this turn
+};
+
+// Build the list of droppable turns (all user turns except the last).
+// file_offset/file_count track positions in the parallel out_files vector.
+static std::vector<TurnSpan> chat_build_droppable_turns(
+    const common_chat_templates_inputs & inputs)
+{
+    auto count_markers = [](const common_chat_msg & msg) -> size_t {
+        size_t n = 0;
+        for (const auto & p : msg.content_parts)
+            if (p.type == "media_marker") n++;
+        return n;
+    };
+
+    size_t last_user = SIZE_MAX;
+    for (size_t i = 0; i < inputs.messages.size(); ++i)
+        if (inputs.messages[i].role == "user") last_user = i;
+
+    std::vector<TurnSpan> turns;
+    size_t i           = 0;
+    size_t file_cursor = 0;
+    while (i < inputs.messages.size() && inputs.messages[i].role == "system") {
+        file_cursor += count_markers(inputs.messages[i]);
+        ++i;
+    }
+    while (i < inputs.messages.size()) {
+        if (inputs.messages[i].role != "user") {
+            file_cursor += count_markers(inputs.messages[i]);
+            ++i;
+            continue;
+        }
+        if (i == last_user) break;
+        TurnSpan span{ i, 1, file_cursor, count_markers(inputs.messages[i]) };
+        ++i;
+        while (i < inputs.messages.size() && inputs.messages[i].role != "user") {
+            ++span.msg_count;
+            span.file_count += count_markers(inputs.messages[i]);
+            ++i;
+        }
+        file_cursor += span.file_count;
+        turns.push_back(span);
+    }
+    return turns;
+}
+
 void chat_truncate_messages(
     common_chat_templates_inputs & inputs,
     const common_chat_templates  * tmpls,
@@ -2157,6 +2216,29 @@ void chat_truncate_messages(
     int32_t                        target_tokens)
 {
     int32_t n_tokens = chat_n_tokens(inputs, tmpls, vocab);
+    int32_t deficit  = n_tokens - target_tokens;
+    if (deficit <= 0) return;
+
+    // Pre-scan droppable turns and accumulate content-only token estimates until >= deficit.
+    // Framing tokens (~4-8 per message) are excluded — any shortfall is caught by the cleanup.
+    const auto turns = chat_build_droppable_turns(inputs);
+    int32_t    accumulated = 0;
+    size_t     n_drop      = 0;
+    for (size_t t = 0; t < turns.size() && accumulated < deficit; ++t) {
+        for (size_t i = turns[t].msg_first; i < turns[t].msg_first + turns[t].msg_count; ++i)
+            accumulated += (int32_t)common_tokenize(vocab, chat_msg_text(inputs.messages[i]), false, false).size();
+        ++n_drop;
+    }
+
+    // Batch-erase the selected turns in a single vector operation.
+    if (n_drop > 0) {
+        inputs.messages.erase(
+            inputs.messages.begin() + (ptrdiff_t)turns[0].msg_first,
+            inputs.messages.begin() + (ptrdiff_t)(turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count));
+    }
+
+    // Verify and clean up any under-drop (framing not counted in estimates; should be rare).
+    n_tokens = chat_n_tokens(inputs, tmpls, vocab);
     while (n_tokens >= target_tokens) {
         if (!chat_drop_first_user_turn(inputs, nullptr, nullptr)) break;
         n_tokens = chat_n_tokens(inputs, tmpls, vocab);
@@ -2215,7 +2297,38 @@ void chat_truncate_messages_with_media(
         return true;
     };
 
-    int32_t n_pos = initial_n_pos;
+    // Pre-scan droppable turns: estimate per-turn pos cost, then batch-drop.
+    // Content-only text tokens (no framing) — any shortfall is caught by the cleanup loop.
+    // Image cost is exact (from cached image_costs); marker tokens subtracted to convert to pos-space.
+    if (initial_n_pos >= target_pos) {
+        const auto turns   = chat_build_droppable_turns(inputs);
+        int32_t    deficit = initial_n_pos - target_pos;
+        int32_t    accumulated = 0;
+        size_t     n_drop      = 0;
+        for (size_t t = 0; t < turns.size() && accumulated < deficit; ++t) {
+            for (size_t mi = turns[t].msg_first; mi < turns[t].msg_first + turns[t].msg_count; ++mi)
+                accumulated += (int32_t)common_tokenize(vocab, chat_msg_text(inputs.messages[mi]), false, false).size();
+            accumulated -= (int32_t)turns[t].file_count * marker_token_cost;
+            for (size_t fi = turns[t].file_offset; fi < turns[t].file_offset + turns[t].file_count; ++fi)
+                accumulated += (int32_t)image_costs[fi];
+            ++n_drop;
+        }
+
+        if (n_drop > 0) {
+            const size_t msg_begin  = turns[0].msg_first;
+            const size_t msg_end    = turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count;
+            const size_t file_begin = turns[0].file_offset;
+            const size_t file_end   = turns[n_drop - 1].file_offset + turns[n_drop - 1].file_count;
+            for (size_t fi = file_begin; fi < file_end; ++fi)
+                image_pos_total -= image_costs[fi];
+            inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)msg_begin, inputs.messages.begin() + (ptrdiff_t)msg_end);
+            image_costs.erase(image_costs.begin() + (ptrdiff_t)file_begin, image_costs.begin() + (ptrdiff_t)file_end);
+            out_files.erase(out_files.begin() + (ptrdiff_t)file_begin, out_files.begin() + (ptrdiff_t)file_end);
+        }
+    }
+
+    // Verify + one-at-a-time cleanup for any estimation residual (should be rare).
+    int32_t n_pos = count_pos();
     while (n_pos >= target_pos) {
         if (!drop_one()) break;
         n_pos = count_pos();
