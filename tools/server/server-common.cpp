@@ -2225,9 +2225,14 @@ void chat_truncate_messages(
     int32_t    accumulated = 0;
     size_t     n_drop      = 0;
     for (size_t t = 0; t < turns.size() && accumulated < deficit; ++t) {
+        common_chat_templates_inputs inputs_turn;
         for (size_t i = turns[t].msg_first; i < turns[t].msg_first + turns[t].msg_count; ++i)
-            accumulated += (int32_t)common_tokenize(vocab, chat_msg_text(inputs.messages[i]), false, false).size();
-        ++n_drop;
+        {
+            inputs_turn.messages.push_back(inputs.messages[i]);
+            ++n_drop;
+        }
+        common_chat_params chat_params_turn = common_chat_templates_apply(tmpls, inputs_turn);
+        accumulated += (int32_t)common_tokenize(vocab, chat_params_turn.prompt, false, false).size();
     }
 
     // Batch-erase the selected turns in a single vector operation.

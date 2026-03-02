@@ -5,6 +5,8 @@ from test_vision_api import get_img_url
 
 server: ServerProcess
 
+IMAGE_URI_0 = get_img_url("IMG_BASE64_URI_0")
+
 SYSTEM = "You are a helpful assistant."
 FINAL_USER = "[U Last]This is the most recent user message."
 N_TURNS_OVERFLOW = 100
@@ -15,7 +17,7 @@ def _user_msg(i: int, include_image: bool = False) -> str|list[dict]:
     if include_image:
         content = [
                     {"type": "text", "text": content},
-                    {"type": "image_url", "image_url": {"url": get_img_url("IMG_BASE64_URI_0")}},
+                    {"type": "image_url", "image_url": {"url": IMAGE_URI_0}},
                 ]
     return content
 
