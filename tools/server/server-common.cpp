@@ -2148,16 +2148,6 @@ static bool chat_drop_first_user_turn(
     return true;
 }
 
-// Extract the plain text of a message (concatenate text content_parts; skip media_marker).
-// TODO this needed? what about tools? does not templateing can merge a full turn sequence of messages?
-static std::string chat_msg_text(const common_chat_msg & msg) {
-    if (!msg.content.empty()) return msg.content;
-    std::string text;
-    for (const auto & p : msg.content_parts)
-        if (p.type == "text") text += p.text;
-    return text;
-}
-
 // Describes a contiguous block of messages that forms one droppable user turn.
 struct TurnSpan {
     size_t msg_first;   // index of user message in inputs.messages
@@ -2215,35 +2205,38 @@ void chat_truncate_messages(
     const struct llama_vocab     * vocab,
     int32_t                        target_tokens)
 {
-    int32_t n_tokens = chat_n_tokens(inputs, tmpls, vocab);
-    int32_t deficit  = n_tokens - target_tokens;
-    if (deficit <= 0) return;
+    if (chat_n_tokens(inputs, tmpls, vocab) < target_tokens) return;
 
-    // Pre-scan droppable turns and accumulate content-only token estimates until >= deficit.
-    // Framing tokens (~4-8 per message) are excluded — any shortfall is caught by the cleanup.
     const auto turns = chat_build_droppable_turns(inputs);
-    int32_t    accumulated = 0;
-    size_t     n_drop      = 0;
-    for (size_t t = 0; t < turns.size() && accumulated < deficit; ++t) {
-        common_chat_templates_inputs inputs_turn;
-        for (size_t i = turns[t].msg_first; i < turns[t].msg_first + turns[t].msg_count; ++i)
-        {
-            inputs_turn.messages.push_back(inputs.messages[i]);
+    if (turns.empty()) return;
+
+    // Exact token count after hypothetically dropping the first n_drop turns.
+    auto count_after_drop = [&](size_t n_drop) -> int32_t {
+        common_chat_templates_inputs tmp = inputs;
+        tmp.messages.erase(
+            tmp.messages.begin() + (ptrdiff_t)turns[0].msg_first,
+            tmp.messages.begin() + (ptrdiff_t)(turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count));
+        return chat_n_tokens(tmp, tmpls, vocab);
+    };
+
+    // Binary search: smallest n_drop in [1, N] where exact count < target_tokens.
+    size_t lo = 1, hi = turns.size();
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (count_after_drop(mid) < target_tokens) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
         }
-        common_chat_params chat_params_turn = common_chat_templates_apply(tmpls, inputs_turn);
-        accumulated += (int32_t)common_tokenize(vocab, chat_params_turn.prompt, false, false).size();
-        ++n_drop;
     }
+    const size_t n_drop = lo;
 
-    // Batch-erase the selected turns in a single vector operation.
-    if (n_drop > 0) {
-        inputs.messages.erase(
-            inputs.messages.begin() + (ptrdiff_t)turns[0].msg_first,
-            inputs.messages.begin() + (ptrdiff_t)(turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count));
-    }
+    inputs.messages.erase(
+        inputs.messages.begin() + (ptrdiff_t)turns[0].msg_first,
+        inputs.messages.begin() + (ptrdiff_t)(turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count));
 
-    // Verify and clean up any under-drop (framing not counted in estimates; should be rare).
-    n_tokens = chat_n_tokens(inputs, tmpls, vocab);
+    // Safety: clean up if even dropping all droppable turns is not enough.
+    int32_t n_tokens = chat_n_tokens(inputs, tmpls, vocab);
     while (n_tokens >= target_tokens) {
         if (!chat_drop_first_user_turn(inputs, nullptr, nullptr)) break;
         n_tokens = chat_n_tokens(inputs, tmpls, vocab);
@@ -2302,24 +2295,42 @@ void chat_truncate_messages_with_media(
         return true;
     };
 
-    // Pre-scan droppable turns: estimate per-turn pos cost, then batch-drop.
-    // Content-only text tokens (no framing) — any shortfall is caught by the cleanup loop.
-    // Image cost is exact (from cached image_costs); marker tokens subtracted to convert to pos-space.
     if (initial_n_pos >= target_pos) {
-        const auto turns   = chat_build_droppable_turns(inputs);
-        int32_t    deficit = initial_n_pos - target_pos;
-        int32_t    accumulated = 0;
-        size_t     n_drop      = 0;
-        for (size_t t = 0; t < turns.size() && accumulated < deficit; ++t) {
-            for (size_t mi = turns[t].msg_first; mi < turns[t].msg_first + turns[t].msg_count; ++mi)
-                accumulated += (int32_t)common_tokenize(vocab, chat_msg_text(inputs.messages[mi]), false, false).size();
-            accumulated -= (int32_t)turns[t].file_count * marker_token_cost;
-            for (size_t fi = turns[t].file_offset; fi < turns[t].file_offset + turns[t].file_count; ++fi)
-                accumulated += (int32_t)image_costs[fi];
-            ++n_drop;
-        }
+        const auto turns = chat_build_droppable_turns(inputs);
 
-        if (n_drop > 0) {
+        // Compute pos count after hypothetically dropping the first n_drop turns.
+        // Cheap: text re-tokenization + cached image costs (no image re-decoding).
+        auto count_pos_after_drop = [&](size_t n_drop) -> int32_t {
+            common_chat_templates_inputs tmp = inputs;
+            size_t  files_removed   = 0;
+            int32_t img_pos_removed = 0;
+            const size_t file_begin = turns[0].file_offset;
+            const size_t file_end   = turns[n_drop - 1].file_offset + turns[n_drop - 1].file_count;
+            files_removed = file_end - file_begin;
+            for (size_t fi = file_begin; fi < file_end; ++fi)
+                img_pos_removed += (int32_t)image_costs[fi];
+            tmp.messages.erase(
+                tmp.messages.begin() + (ptrdiff_t)turns[0].msg_first,
+                tmp.messages.begin() + (ptrdiff_t)(turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count));
+            int32_t n = chat_n_tokens(tmp, tmpls, vocab);
+            n -= (int32_t)(out_files.size() - files_removed) * marker_token_cost;
+            n += (int32_t)(image_pos_total - img_pos_removed);
+            return n;
+        };
+
+        // Binary search: smallest n_drop in [1, N] where exact pos count < target_pos.
+        size_t lo = 1, hi = turns.size();
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+            if (count_pos_after_drop(mid) < target_pos) {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        const size_t n_drop = lo;
+
+        if (n_drop > 0 && !turns.empty()) {
             const size_t msg_begin  = turns[0].msg_first;
             const size_t msg_end    = turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count;
             const size_t file_begin = turns[0].file_offset;
@@ -2332,7 +2343,7 @@ void chat_truncate_messages_with_media(
         }
     }
 
-    // Verify + one-at-a-time cleanup for any estimation residual (should be rare).
+    // Safety: clean up if even dropping all droppable turns is not enough.
     int32_t n_pos = count_pos();
     while (n_pos >= target_pos) {
         if (!drop_one()) break;

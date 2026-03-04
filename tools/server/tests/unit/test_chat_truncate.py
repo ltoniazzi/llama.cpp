@@ -1,3 +1,4 @@
+import re
 import pytest
 import time
 from utils import *
@@ -9,11 +10,44 @@ IMAGE_URI_0 = get_img_url("IMG_BASE64_URI_0")
 
 SYSTEM = "You are a helpful assistant."
 FINAL_USER = "[U Last]This is the most recent user message."
-N_TURNS_OVERFLOW = 100
+N_TURNS_OVERFLOW = 95
 MAX_COMPLETION_TOKENS = 1
 
-def _user_msg(i: int, include_image: bool = False) -> str|list[dict]:
-    content = f"[U{i:02d}] Please explain topic {i} in detail."
+# ── Benchmark model registry ──────────────────────────────────────────────────
+# Each entry drives one parametrized run of test_chat_truncate_timings_massive.
+# Fields:
+#   hf_repo          – "<org>/<repo>:<quant>" downloaded by the test runner
+#   alias            – short name used in output file names
+#   n_ctx            – phase-1 (no-truncation) context; must fit the largest conversation
+#   include_image    – True → attach one image per user turn (requires a vision model + mmproj)
+#   mmproj_hf_repo   – HF repo for the mmproj GGUF; None for text-only models
+BENCHMARK_MODELS = {
+    "gemma3-1b": {
+        "hf_repo":          "ggml-org/gemma-3-1b-it-GGUF:Q4_K_M",
+        "alias":            "gemma3-1b",
+        "n_ctx":            128_000,
+        "include_image":    False,
+        "mmproj_hf_repo":   None,
+    },
+    "tinygemma3": {
+        "hf_repo":          "ggml-org/tinygemma3-GGUF:Q8_0",
+        "alias":            "tinygemma3",
+        "n_ctx":            135_506,
+        "include_image":    True,
+        "mmproj_hf_repo":   "ggml-org/tinygemma3-GGUF",
+    },
+    "gemma3-4b": {
+        "hf_repo":          "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
+        "alias":            "gemma3-4b",
+        "n_ctx":            32_768,    # effective max for this GGUF (128K requires RoPE scaling params)
+        "include_image":    False,
+        "mmproj_hf_repo":   "ggml-org/gemma-3-4b-it-GGUF",
+    },
+}
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _user_msg(i: int, include_image: bool = False, repeat: int = 1) -> str|list[dict]:
+    content = f"[U{i:03d}] Please explain topic {i:03d} in detail." * repeat
     if include_image:
         content = [
                     {"type": "text", "text": content},
@@ -21,15 +55,15 @@ def _user_msg(i: int, include_image: bool = False) -> str|list[dict]:
                 ]
     return content
 
-def _asst_msg(i: int) -> str:
-    return f"[A{i:02d}] Here is my explanation of topic {i}."
+def _asst_msg(i: int, repeat: int = 1) -> str:
+    return f"[A{i:03d}] Here is my explanation of topic {i:03d}." * repeat
 
 
-def _get_messages(n_turns: int = 128, include_final_user: bool = True, include_image: bool = False) -> list[dict]:
+def _get_messages(n_turns: int = 128, include_final_user: bool = True, include_image: bool = False, repeat: int = 1) -> list[dict]:
     msgs = [{"role": "system", "content": SYSTEM}]
     for i in range(1, n_turns + 1):
-        msgs.append({"role": "user",      "content": _user_msg(i, include_image=include_image)})
-        msgs.append({"role": "assistant", "content": _asst_msg(i)})
+        msgs.append({"role": "user",      "content": _user_msg(i, include_image=include_image, repeat=repeat)})
+        msgs.append({"role": "assistant", "content": _asst_msg(i, repeat=repeat)})
     if include_final_user:
         msgs.append({"role": "user", "content": FINAL_USER})
     return msgs
@@ -121,7 +155,7 @@ def test_chat_truncate_no_op():
     assert res.status_code == 200
     assert "__verbose" in res.body
     prompt = res.body["__verbose"]["prompt"]
-    assert "[U01]" in prompt, "No turn should not be dropped"
+    assert "[U001]" in prompt, "No turn should not be dropped"
     assert_turns_consistency_in_prompt(prompt)
 
 
@@ -346,7 +380,7 @@ def test_chat_truncate_after_sleep_wake():
     })
     assert res2.status_code == 200
     prompt = res2.body["__verbose"]["prompt"]
-    assert "[U01]" not in prompt, "First turn should be dropped"
+    assert "[U001]" not in prompt, "First turn should be dropped"
 
     # Verify server woke up
     res_props = server.make_request("GET", "/props")
@@ -414,10 +448,197 @@ def test_chat_truncate_not_multimodal_timings():
         timing = {"n_turns": n_turns, "status": res.status_code, "time": time.time()-t0}
         timings.append(timing)
 
-        # Truncation not triggered if an media is present
         assert res.status_code == 200
-    
+
     print("Timings:")
     for t in timings:
         print(t)
         assert t["time"] < 1.0
+
+
+@pytest.mark.parametrize("benchmark_key", list(BENCHMARK_MODELS.keys()))
+def test_chat_truncate_not_multimodal_timings_massive(benchmark_key):
+    """
+    Each turn is repeat=50x larger than the baseline. Measures latency against
+    the amount of truncation done: tokens_in (full conversation), tokens_out
+    (after truncation), and turns_removed.
+
+    Binary search truncation is O(N log N): log N steps each tokenizing ~N tokens.
+    The timing therefore scales linearly with tokens_in, dominated by tokenization
+    of the full payload, not by the number of search iterations.
+
+    Phase 1: no-truncation server with large n_ctx to measure tokens_in.
+    Phase 2: truncation server to measure latency, tokens_out, turns_removed.
+
+    Models are defined in BENCHMARK_MODELS above; add entries there to extend.
+    """
+    global server
+
+    BENCHMARK_MODEL = BENCHMARK_MODELS[benchmark_key]
+
+    REPEAT        = 50
+    include_image = BENCHMARK_MODEL["include_image"]
+    n_turns_list  = [1, 5, 10, 50, 100, 200]
+
+    def _make_server(**kwargs) -> ServerProcess:
+        s = ServerProcess()
+        s.offline       = False
+        s.model_hf_repo = BENCHMARK_MODEL["hf_repo"]
+        s.model_hf_file = None
+        s.model_alias   = BENCHMARK_MODEL["alias"]
+        s.jinja         = True
+        s.n_slots       = 1
+        if include_image and BENCHMARK_MODEL["mmproj_hf_repo"]:
+            s.mmproj_url = f"hf:{BENCHMARK_MODEL['mmproj_hf_repo']}"
+        for k, v in kwargs.items():
+            setattr(s, k, v)
+        return s
+
+    # Phase 1: measure full token counts without truncation.
+    server = _make_server(n_ctx=BENCHMARK_MODEL["n_ctx"], chat_truncate=False, debug=True)
+    server.start()
+
+    # tokens_in: {"count": int|None, "ctx_exceeded": bool}
+    tokens_in = {}
+    for n_turns in n_turns_list:
+        msgs = _get_messages(n_turns=n_turns, include_final_user=False, include_image=include_image, repeat=REPEAT)
+        res = server.make_request("POST", "/chat/completions", data={
+            "max_completion_tokens": MAX_COMPLETION_TOKENS,
+            "messages": msgs,
+        })
+        if res.status_code == 200:
+            tokens_in[n_turns] = {"count": res.body["usage"]["prompt_tokens"], "ctx_exceeded": False}
+        else:
+            tokens_in[n_turns] = {"count": res.body.get("error", {}).get("n_prompt_tokens"), "ctx_exceeded": True}
+
+    server.stop()
+
+    # Phase 2: timing with truncation.
+    server = _make_server(n_ctx=2048, chat_truncate=True, chat_truncate_max_keep=0.8, debug=True)
+    server.start()
+
+    model = server.model_alias
+    timings = []
+
+    for n_turns in n_turns_list:
+        msgs = _get_messages(n_turns=n_turns, include_final_user=False, include_image=include_image, repeat=REPEAT)
+        t0 = time.time()
+        res = server.make_request("POST", "/chat/completions", data={
+            "max_completion_tokens": MAX_COMPLETION_TOKENS,
+            "messages": msgs,
+        })
+        elapsed = time.time() - t0
+        assert res.status_code == 200
+
+        tokens_out = res.body["usage"]["prompt_tokens"]
+        prompt = res.body.get("__verbose", {}).get("prompt", "")
+        # Count distinct turn indices remaining (e.g. [U001], [U002]) — content is
+        # repeated `repeat` times per turn so we use a set to deduplicate.
+        turns_remaining = len(set(re.findall(r'\[U(\d+)\]', prompt)))
+        timings.append({
+            "model":         model,
+            "n_turns":       n_turns,
+            "tokens_in":     tokens_in[n_turns]["count"],
+            "ctx_exceeded":  tokens_in[n_turns]["ctx_exceeded"],
+            "tokens_out":    tokens_out,
+            "turns_removed": n_turns - turns_remaining,
+            "time":          elapsed,
+        })
+
+    print("Timings (massive):")
+    with open(f"chat_truncate_not_multimodal_timings_massive_{model}.json", "w") as f:
+        json.dump(timings, f, indent=2)
+    for t in timings:
+        print(t)
+        assert t["time"] < 1.0
+
+
+@pytest.mark.parametrize("benchmark_key", list(BENCHMARK_MODELS.keys()))
+def test_chat_truncate_apply_template_timings_massive(benchmark_key):
+    """
+    Like test_chat_truncate_not_multimodal_timings_massive but uses /apply-template
+    instead of /chat/completions, so the timer measures ONLY truncation + template
+    rendering — no model inference cost.
+
+    Phase 1: /apply-template without truncation (large n_ctx) to get the full rendered
+             prompt; /tokenize it for an exact tokens_in count.
+    Phase 2: /apply-template with truncation; time the call; /tokenize the response
+             prompt for tokens_out.
+    """
+    global server
+
+    BENCHMARK_MODEL = BENCHMARK_MODELS[benchmark_key]
+
+    REPEAT        = 50
+    include_image = BENCHMARK_MODEL["include_image"]
+    n_turns_list  = [1, 5, 10, 50, 100, 200]
+
+    def _make_server(**kwargs) -> ServerProcess:
+        s = ServerProcess()
+        s.offline       = False
+        s.model_hf_repo = BENCHMARK_MODEL["hf_repo"]
+        s.model_hf_file = None
+        s.model_alias   = BENCHMARK_MODEL["alias"]
+        s.jinja         = True
+        s.n_slots       = 1
+        if include_image and BENCHMARK_MODEL["mmproj_hf_repo"]:
+            s.mmproj_url = f"hf:{BENCHMARK_MODEL['mmproj_hf_repo']}"
+        for k, v in kwargs.items():
+            setattr(s, k, v)
+        return s
+
+    # Phase 1: exact token counts via /apply-template + /tokenize (no inference).
+    server = _make_server(n_ctx=BENCHMARK_MODEL["n_ctx"], chat_truncate=False)
+    server.start()
+
+    tokens_in = {}
+    for n_turns in n_turns_list:
+        msgs = _get_messages(n_turns=n_turns, include_final_user=False, include_image=include_image, repeat=REPEAT)
+        res = server.make_request("POST", "/apply-template", data={"messages": msgs})
+        if res.status_code == 200:
+            prompt_text = res.body["prompt"]
+            tok = server.make_request("POST", "/tokenize", data={"content": prompt_text, "add_special": False})
+            tokens_in[n_turns] = {"count": len(tok.body["tokens"]), "ctx_exceeded": False}
+        else:
+            tokens_in[n_turns] = {"count": None, "ctx_exceeded": True}
+
+    server.stop()
+
+    # Phase 2: timing with truncation — /apply-template only, no inference.
+    server = _make_server(n_ctx=2048, chat_truncate=True, chat_truncate_max_keep=0.8)
+    server.start()
+
+    model = server.model_alias
+    timings = []
+
+    for n_turns in n_turns_list:
+        msgs = _get_messages(n_turns=n_turns, include_final_user=False, include_image=include_image, repeat=REPEAT)
+        t0 = time.time()
+        res = server.make_request("POST", "/apply-template", data={"messages": msgs})
+        elapsed = time.time() - t0
+        assert res.status_code == 200
+
+        prompt = res.body["prompt"]
+        turns_remaining = len(set(re.findall(r'\[U(\d+)\]', prompt)))
+        tok = server.make_request("POST", "/tokenize", data={"content": prompt, "add_special": False})
+        tokens_out = len(tok.body["tokens"])
+        timings.append({
+            "model":         model,
+            "n_turns":       n_turns,
+            "tokens_in":     tokens_in[n_turns]["count"],
+            "ctx_exceeded":  tokens_in[n_turns]["ctx_exceeded"],
+            "tokens_out":    tokens_out,
+            "turns_removed": n_turns - turns_remaining,
+            "time":          elapsed,
+        })
+
+    print("Timings (apply-template, massive):")
+    fname = f"chat_truncate_apply_template_timings_massive_{model}.json"
+    with open(fname, "w") as f:
+        json.dump(timings, f, indent=2)
+    for t in timings:
+        print(t)
+
+
+if __name__ == "__main__":
+    test_chat_truncate_apply_template_timings_massive("gemma3-4b")
