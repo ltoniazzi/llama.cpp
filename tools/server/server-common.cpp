@@ -2105,46 +2105,6 @@ static size_t chat_count_media_markers(const common_chat_msg & msg) {
     return n;
 }
 
-// Drop the first user turn (and any immediately following non-user messages) from inputs.messages.
-// Returns false if there is only one or zero user turns left (cannot truncate further).
-// If out_file_offset / out_n_files_removed are non-null, also counts <__media__> markers so the
-// caller can keep out_files in sync: erase [out_file_offset, out_file_offset + out_n_files_removed).
-static bool chat_drop_first_user_turn(
-    common_chat_templates_inputs & inputs,
-    size_t                       * out_file_offset,
-    size_t                       * out_n_files_removed)
-{
-    size_t first_user_msg = (size_t)-1;
-    bool one_or_less = true;
-    for (size_t i = 0; i < inputs.messages.size(); ++i) {
-        if (inputs.messages[i].role == "user") {
-            if (first_user_msg != (size_t)-1) { one_or_less = false; break; }
-            first_user_msg = i;
-        }
-    }
-    if (one_or_less) return false;
-
-    if (out_file_offset) {
-        *out_file_offset = 0;
-        for (size_t i = 0; i < first_user_msg; i++) {
-            *out_file_offset += chat_count_media_markers(inputs.messages[i]);
-        }
-    }
-
-    if (out_n_files_removed) {
-        *out_n_files_removed = chat_count_media_markers(inputs.messages[first_user_msg]);
-        for (size_t i = first_user_msg + 1; i < inputs.messages.size() && inputs.messages[i].role != "user"; i++) {
-            *out_n_files_removed += chat_count_media_markers(inputs.messages[i]);
-        }
-    }
-
-    inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_user_msg);
-    while (first_user_msg < inputs.messages.size() && inputs.messages[first_user_msg].role != "user") {
-        inputs.messages.erase(inputs.messages.begin() + (ptrdiff_t)first_user_msg);
-    }
-    return true;
-}
-
 // Describes a contiguous block of messages that forms one droppable user turn.
 struct TurnSpan {
     size_t msg_first;   // index of user message in inputs.messages
@@ -2181,7 +2141,7 @@ static size_t chat_bisect_n_drop(size_t n_turns, CountFn count, int32_t target) 
 }
 
 // Build the list of droppable turns (all user turns except the last).
-// file_offset/file_count track positions in the parallel out_files vector.
+// file_offset/file_count track positions in the out_files vector.
 static std::vector<TurnSpan> chat_build_droppable_turns(
     const common_chat_templates_inputs & inputs)
 {
@@ -2244,7 +2204,11 @@ void chat_truncate_messages_with_media(
     std::vector<raw_buffer>      & out_files,
     int32_t                        target_pos)
 {
-    // Decode bitmaps and run mtmd_tokenize once to get per-image n_pos values.
+    // Collect turns elegible to be dropped
+    const auto turns = chat_build_droppable_turns(inputs);
+    if (turns.empty()) return;
+
+    // Run mtmd_tokenize once to get per-image n_pos values.
     common_chat_params p0 = common_chat_templates_apply(tmpls, inputs);
     server_tokens initial_st = process_mtmd_prompt(mctx, p0.prompt, out_files);
     std::vector<llama_pos> image_costs = initial_st.media_pos_costs();
@@ -2253,42 +2217,51 @@ void chat_truncate_messages_with_media(
     llama_pos image_pos_total = 0;
     for (auto c : image_costs) {image_pos_total += c;}
 
-    // marker_token_cost: tokens the template emits per image placeholder in the rendered prompt.
-    // Derivation: chat_n_tokens = text_pure + n_images * marker_cost
-    //             initial_n_pos = text_pure + image_pos_total
-    //  => marker_cost = (chat_n_tokens + image_pos_total - initial_n_pos) / n_images
+    // Estimate the error due to the <__media__> marker replacement heuristic 
+    // (issue is that each tokeniser can give different cost for <__media__>. We could skip if we can cache mtmd processing add_media)
+    // markers_token_cost_num = chat_n_tokens + image_pos_total − initial_n_pos.
+    // Positive: chat_n_tokens over-counts → count_pos_after_drop overshoots a little → bisect drops ≤1 extra turn (safe).
+    // Negative: chat_n_tokens under-counts → count_pos_after_drop would undershoot → we apply a
+    //   per-image ceiling correction to convert the undershoot into a small overshoot (still ≤1 extra turn).
     const int32_t initial_chat_n_tokens = chat_n_tokens(inputs, tmpls, vocab);
     const int32_t initial_n_pos         = (int32_t)initial_st.pos_next(-1);
     const int32_t n_images_initial      = (int32_t)out_files.size();
-    const int32_t marker_token_cost_num = initial_chat_n_tokens + (int32_t)image_pos_total - initial_n_pos;
-    GGML_ASSERT(marker_token_cost_num > 0);
-    if (marker_token_cost_num % n_images_initial != 0) {
-    GGML_ABORT("image placeholder token count is not uniform across images. "
-               "Truncation not currently supported for template: %s",
-               common_chat_templates_source(tmpls).c_str());
+    constexpr int32_t MAX_MARKER_COST_PER_IMAGE = 5;
+    const int32_t markers_token_cost_num = initial_chat_n_tokens + (int32_t)image_pos_total - initial_n_pos;
+    const int32_t abs_cost               = markers_token_cost_num < 0 ? -markers_token_cost_num : markers_token_cost_num;
+    if (abs_cost > n_images_initial * MAX_MARKER_COST_PER_IMAGE) {
+        GGML_ABORT("image placeholder token overhead out of expected range [-%d, %d] per image "
+                   "(got total %d for %d images). "
+                   "Truncation not currently supported for template: %s",
+                   MAX_MARKER_COST_PER_IMAGE, MAX_MARKER_COST_PER_IMAGE,
+                   markers_token_cost_num, n_images_initial,
+                   common_chat_templates_source(tmpls).c_str());
     }
-    const int32_t marker_token_cost = marker_token_cost_num / n_images_initial;
+
+    // Per-image correction applied when markers_token_cost_num < 0 to prevent undershoot.
+    const int32_t correction_per_image = (markers_token_cost_num < 0)
+        ? ((-markers_token_cost_num + n_images_initial - 1) / n_images_initial)
+        : 0;
 
     if (initial_n_pos >= target_pos) {
-        const auto turns = chat_build_droppable_turns(inputs);
-
         // Cheap text re-tokenization + cached image costs (no image re-decoding).
+        // correction_per_image (≥0) prevents undershoot when markers_token_cost_num < 0.
         auto count_pos_after_drop = [&](size_t n_drop) -> int32_t {
-            const size_t file_begin    = turns[0].file_offset;
-            const size_t file_end      = turns[n_drop - 1].file_offset + turns[n_drop - 1].file_count;
-            const size_t files_removed = file_end - file_begin;
+            const size_t file_begin     = turns[0].file_offset;
+            const size_t file_end       = turns[n_drop - 1].file_offset + turns[n_drop - 1].file_count;
+            const int32_t files_removed = (int32_t)(file_end - file_begin);
             int32_t img_pos_removed = 0;
             for (size_t fi = file_begin; fi < file_end; ++fi)
                 img_pos_removed += (int32_t)image_costs[fi];
             int32_t n = chat_n_tokens_after_drop(inputs, tmpls, vocab, turns, n_drop);
-            n -= (int32_t)(out_files.size() - files_removed) * marker_token_cost;
             n += (int32_t)(image_pos_total - img_pos_removed);
+            n += correction_per_image * ((int32_t)out_files.size() - files_removed);
             return n;
         };
 
         const size_t n_drop = chat_bisect_n_drop(turns.size(), count_pos_after_drop, target_pos);
 
-        if (n_drop > 0 && !turns.empty()) {
+        if (n_drop > 0) {
             const size_t msg_begin  = turns[0].msg_first;
             const size_t msg_end    = turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count;
             const size_t file_begin = turns[0].file_offset;
