@@ -1064,6 +1064,8 @@ json oaicompat_chat_params_parse(
         int32_t n_predict_with_server_priority = get_n_predict_with_server_priority(body, opt.n_predict);
         int32_t target_pos = chat_truncate_target_tokens(opt.n_ctx_seq, opt.chat_truncate_max_keep, n_predict_with_server_priority);
         if (has_media) {
+            // No chat_needs_truncation guard: mtmd_tokenize must run anyway to get image costs,
+            // and the real size check (initial_n_pos >= target_pos) happens inside.
             chat_truncate_messages_with_media(inputs, opt.tmpls.get(), vocab, mctx, out_files, target_pos);
         } else {
             if (chat_needs_truncation(chat_n_tokens(inputs, opt.tmpls.get(), vocab), opt.n_ctx_seq, n_predict_with_server_priority, opt.chat_truncate_max_keep)) {
@@ -2192,10 +2194,6 @@ void chat_truncate_messages(
         inputs.messages.begin() + (ptrdiff_t)(turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count));
 }
 
-// Exact-count variant for multimodal requests.
-// Images are decoded and processed exactly ONCE via process_mtmd_prompt() to extract per-image
-// n_pos costs (M-RoPE aware). Subsequent iterations recount using cheap text re-tokenization
-// plus arithmetic over the cached costs — no further image decoding in the loop.
 void chat_truncate_messages_with_media(
     common_chat_templates_inputs & inputs,
     const common_chat_templates  * tmpls,
@@ -2217,7 +2215,7 @@ void chat_truncate_messages_with_media(
     llama_pos image_pos_total = 0;
     for (auto c : image_costs) {image_pos_total += c;}
 
-    // Estimate the error due to the <__media__> marker replacement heuristic 
+    // Estimate the error due to the <__media__> marker replacement heuristic
     // (issue is that each tokeniser can give different cost for <__media__>. We could skip if we can cache mtmd processing add_media)
     // markers_token_cost_num = chat_n_tokens + image_pos_total − initial_n_pos.
     // Positive: chat_n_tokens over-counts → count_pos_after_drop overshoots a little → bisect drops ≤1 extra turn (safe).

@@ -311,6 +311,41 @@ def test_chat_truncate_max_keep_one_rejected():
         server.start()
 
 
+def test_chat_truncate_with_images_prevents_overflow():
+    global server
+    server = ServerPreset.tinygemma3()
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.8
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_completion_tokens": MAX_COMPLETION_TOKENS,
+        "messages": _get_messages(n_turns=10, include_image=True),
+    })
+    assert res.status_code == 200
+
+
+def test_chat_truncate_with_images_drops_oldest_keeps_newest():
+    global server
+    server = ServerPreset.tinygemma3()
+    server.chat_truncate = True
+    server.chat_truncate_max_keep = 0.8
+    server.debug = True
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_completion_tokens": MAX_COMPLETION_TOKENS,
+        "messages": _get_messages(n_turns=10, include_image=True),
+    })
+    assert res.status_code == 200
+    assert server.n_ctx is not None and server.n_slots is not None
+    per_slot_ctx = server.n_ctx // server.n_slots
+    target = int(server.chat_truncate_max_keep * per_slot_ctx)
+    assert res.body["usage"]["prompt_tokens"] < target
+    assert "__verbose" in res.body
+    prompt = res.body["__verbose"]["prompt"]
+    assert _user_msg(1) not in prompt, "Oldest user turn text should be dropped"
+    assert FINAL_USER in prompt, "Most recent user message should be kept"
+
+
 def test_chat_truncate_after_sleep_wake():
     """
     TODO This test can pass both cases (use vocab refreshed or stale from chat_params),

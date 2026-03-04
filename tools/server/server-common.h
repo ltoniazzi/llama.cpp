@@ -422,9 +422,10 @@ void chat_truncate_messages(
     const struct llama_vocab     * vocab,
     int32_t                        target_tokens);
 
-// Exact-count variant for multimodal requests.
-// Uses n_pos (not n_tokens) for correct M-RoPE accounting, and keeps out_files in sync.
-// Images are decoded and processed exactly once; subsequent iterations use cached n_pos values.
+// Almost exact-count variant for multimodal requests.
+// Images are decoded and processed exactly ONCE via process_mtmd_prompt() to extract per-image
+// n_pos costs (M-RoPE aware). Subsequent iterations recount using cheap text re-tokenization
+// plus arithmetic over the cached costs — no further image decoding in the loop.
 void chat_truncate_messages_with_media(
     common_chat_templates_inputs & inputs,
     const common_chat_templates  * tmpls,
