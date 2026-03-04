@@ -2156,6 +2156,33 @@ struct TurnSpan {
     size_t file_count;  // number of media files in this turn
 };
 
+// Token count after hypothetically dropping the first n_drop turns from inputs.
+static int32_t chat_n_tokens_after_drop(
+    const common_chat_templates_inputs & inputs,
+    const common_chat_templates        * tmpls,
+    const struct llama_vocab           * vocab,
+    const std::vector<TurnSpan>        & turns,
+    size_t                               n_drop)
+{
+    common_chat_templates_inputs tmp = inputs;
+    tmp.messages.erase(
+        tmp.messages.begin() + (ptrdiff_t)turns[0].msg_first,
+        tmp.messages.begin() + (ptrdiff_t)(turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count));
+    return chat_n_tokens(tmp, tmpls, vocab);
+}
+
+// Returns the smallest n_drop in [1, n_turns] for which count(n_drop) < target.
+template<typename CountFn>
+static size_t chat_bisect_n_drop(size_t n_turns, CountFn count, int32_t target) {
+    size_t lo = 1, hi = n_turns;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (count(mid) < target) { hi = mid; }
+        else                     { lo = mid + 1; }
+    }
+    return lo;
+}
+
 // Build the list of droppable turns (all user turns except the last).
 // file_offset/file_count track positions in the parallel out_files vector.
 static std::vector<TurnSpan> chat_build_droppable_turns(
@@ -2210,26 +2237,11 @@ void chat_truncate_messages(
     const auto turns = chat_build_droppable_turns(inputs);
     if (turns.empty()) return;
 
-    // Exact token count after hypothetically dropping the first n_drop turns.
     auto count_after_drop = [&](size_t n_drop) -> int32_t {
-        common_chat_templates_inputs tmp = inputs;
-        tmp.messages.erase(
-            tmp.messages.begin() + (ptrdiff_t)turns[0].msg_first,
-            tmp.messages.begin() + (ptrdiff_t)(turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count));
-        return chat_n_tokens(tmp, tmpls, vocab);
+        return chat_n_tokens_after_drop(inputs, tmpls, vocab, turns, n_drop);
     };
 
-    // Binary search: smallest n_drop in [1, N] where exact count < target_tokens.
-    size_t lo = 1, hi = turns.size();
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo) / 2;
-        if (count_after_drop(mid) < target_tokens) {
-            hi = mid;
-        } else {
-            lo = mid + 1;
-        }
-    }
-    const size_t n_drop = lo;
+    const size_t n_drop = chat_bisect_n_drop(turns.size(), count_after_drop, target_tokens);
 
     inputs.messages.erase(
         inputs.messages.begin() + (ptrdiff_t)turns[0].msg_first,
@@ -2298,37 +2310,21 @@ void chat_truncate_messages_with_media(
     if (initial_n_pos >= target_pos) {
         const auto turns = chat_build_droppable_turns(inputs);
 
-        // Compute pos count after hypothetically dropping the first n_drop turns.
         // Cheap: text re-tokenization + cached image costs (no image re-decoding).
         auto count_pos_after_drop = [&](size_t n_drop) -> int32_t {
-            common_chat_templates_inputs tmp = inputs;
-            size_t  files_removed   = 0;
+            const size_t file_begin    = turns[0].file_offset;
+            const size_t file_end      = turns[n_drop - 1].file_offset + turns[n_drop - 1].file_count;
+            const size_t files_removed = file_end - file_begin;
             int32_t img_pos_removed = 0;
-            const size_t file_begin = turns[0].file_offset;
-            const size_t file_end   = turns[n_drop - 1].file_offset + turns[n_drop - 1].file_count;
-            files_removed = file_end - file_begin;
             for (size_t fi = file_begin; fi < file_end; ++fi)
                 img_pos_removed += (int32_t)image_costs[fi];
-            tmp.messages.erase(
-                tmp.messages.begin() + (ptrdiff_t)turns[0].msg_first,
-                tmp.messages.begin() + (ptrdiff_t)(turns[n_drop - 1].msg_first + turns[n_drop - 1].msg_count));
-            int32_t n = chat_n_tokens(tmp, tmpls, vocab);
+            int32_t n = chat_n_tokens_after_drop(inputs, tmpls, vocab, turns, n_drop);
             n -= (int32_t)(out_files.size() - files_removed) * marker_token_cost;
             n += (int32_t)(image_pos_total - img_pos_removed);
             return n;
         };
 
-        // Binary search: smallest n_drop in [1, N] where exact pos count < target_pos.
-        size_t lo = 1, hi = turns.size();
-        while (lo < hi) {
-            size_t mid = lo + (hi - lo) / 2;
-            if (count_pos_after_drop(mid) < target_pos) {
-                hi = mid;
-            } else {
-                lo = mid + 1;
-            }
-        }
-        const size_t n_drop = lo;
+        const size_t n_drop = chat_bisect_n_drop(turns.size(), count_pos_after_drop, target_pos);
 
         if (n_drop > 0 && !turns.empty()) {
             const size_t msg_begin  = turns[0].msg_first;
